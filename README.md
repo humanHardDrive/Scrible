@@ -10,9 +10,13 @@ the app controls the panel's fast refresh modes directly. So this is a small C++
 that draws straight to the e-ink framebuffer (via [FBInk](https://github.com/NiLuJe/FBInk))
 and reads the pen from evdev, sharing Xournal++'s file format.
 
-## Status: v0.1
+## Status: v0.2 in progress
 
-- Pen with pressure, highlighter, whole-stroke eraser (including the pen's eraser end)
+- A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
+  delete (into a Trash folder); sort by date or by name
+- Pen with pressure, highlighter, and an eraser (also the pen's eraser end) that either
+  cuts away just the ink it passes over, like Xournal++'s standard eraser, or removes
+  whole strokes
 - Three sizes per tool, undo/redo, multiple pages (`>` on the last page adds one)
 - Opens `.xopp` and `.xoj` files from Xournal++ and the original Xournal. Anything it
   can't edit yet (text, images, LaTeX, PDF backgrounds, unknown attributes) is kept and
@@ -22,11 +26,10 @@ and reads the pen from evdev, sharing Xournal++'s file format.
   full grayscale.
 - Desktop build (SDL3) of the same app for development, with an e-ink look
 
-**Not yet run on a Kindle.** The Kindle build works and needs only `libc` and `libm`
-from the firmware (glibc ≤ 2.18). Under QEMU, the ARM test suite passes and ARM renders
-of real Xournal++ files are byte-identical to desktop ones. What still needs a real
-Scribe: input orientation, pen mode, and the launcher. See
-[docs/kindle-notes.md](docs/kindle-notes.md) for what is verified.
+Runs on a Kindle Scribe (2022): pen and touch line up and writing works. The Kindle
+build needs only `libc` and `libm` from the firmware (glibc ≤ 2.18), and the test suite
+also passes on ARM under QEMU. See [docs/kindle-notes.md](docs/kindle-notes.md) for what
+has been verified on the device.
 
 ## Desktop (development)
 
@@ -35,12 +38,14 @@ brew install cmake sdl3            # or your Linux distro's packages
 cmake -S . -B build
 cmake --build build -j
 ./build/xscribe-tests              # unit tests
-./build/xscribe-desktop notes.xopp
+./build/xscribe-desktop            # notebook list in ~/Documents/Xournal-Scribe
 ```
 
+Pass a folder to list the notebooks in it, or a `.xopp` file to open just that one.
 Left mouse button draws, right button erases. A drawing tablet gives real pressure.
 Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z redo, Cmd/Ctrl+S save, P/H/E switch tools,
-1/2/3 set the size, ←/→ change pages, Esc quits. `--no-eink-sim` shows grays while drawing.
+1/2/3 set the size, ←/→ change pages, N new notebook (in the list), Enter confirms,
+Esc goes back or quits. `--no-eink-sim` shows antialiased ink and no e-ink refresh artifacts.
 
 `./build/xopp-render file.xopp page.png --page 1` renders a page with the Kindle's
 renderer, which is handy for checking files from desktop Xournal++.
@@ -74,17 +79,35 @@ KindleModding stack with scriptlet support. KUAL isn't used: it no longer works.
    write near each corner and tap each corner with a finger. The marks should land under
    the pen tip and your finger. It ends by itself after 30 s. If the marks are off, see
    Troubleshooting below.
-3. Open **Xournal-Scribe**. The notebook is `xournal-scribe/notebook.xopp` and the log
-   is `xournal-scribe/xscribe.log`.
+3. Open **Xournal-Scribe**. It starts on the list of notebooks, which are the `.xopp` and
+   `.xoj` files in `xournal-scribe/notebooks/`. Copy files from desktop Xournal++ there to
+   open them on the Kindle. The log is `xournal-scribe/xscribe.log`. (A `notebook.xopp`
+   from version 0.1 is moved into `notebooks/` automatically.)
 
 KPM can't install a local `.kpkg` file, only packages from a repository. Until this
 project publishes one, use the copy method above. The package installs to the same
 place, so both methods are interchangeable, and upgrading or uninstalling never
 touches your notebooks.
 
-The toolbar is along the top: PEN / MARK / ERASE, sizes S / M / L, UNDO / REDO,
-`<` page `>`, SAVE, EXIT. Fingers only operate the toolbar, so your palm can rest on the
-page. EXIT saves and returns to the Kindle home screen.
+In the list:
+
+- Tap a notebook to open it.
+- NEW asks for a name on an on-screen keyboard; leave it empty to use the date and time.
+- NEWEST / A-Z switches the order, and the choice is remembered.
+- Each notebook's "..." button offers RENAME, DUPLICATE and DELETE. Deleted notebooks
+  go into `notebooks/Trash/`, where you can recover them over USB.
+- Files Xournal++ keeps next to a notebook are renamed, copied and deleted along with
+  it (e.g. `Name.xopp.bg.pdf` for an annotated PDF).
+- `<` `>` page through a long list, and EXIT returns to the Kindle home screen.
+
+In a notebook the toolbar is along the top: PEN / MARK / ERASE, sizes S / M / L,
+UNDO / REDO, `<` page `>`, SAVE, BACK, EXIT. Fingers only operate the toolbar, so your
+palm can rest on the page.
+
+- Tap ERASE again to switch between cutting away just what you erase (ERASE) and
+  removing whole strokes (STROKE). The pen's eraser end follows the same setting, and
+  the choice is remembered.
+- BACK saves and returns to the list; EXIT saves and leaves the app.
 
 ### Troubleshooting
 

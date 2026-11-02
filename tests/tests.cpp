@@ -1,5 +1,7 @@
 // Self-contained tests (no framework, so they also build with the Kindle toolchain).
 
+#include <dirent.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <zlib.h>
 
@@ -9,8 +11,10 @@
 #include <string>
 #include <vector>
 
+#include "App.h"
 #include "Editor.h"
 #include "EinkPanel.h"
+#include "Eraser.h"
 #include "Renderer.h"
 #include "XoppFile.h"
 
@@ -366,7 +370,8 @@ TEST(draws_ruled_background) {
 
 TEST(toolbar_layout_fits) {
     for (int width : {600, 1236, 1860}) {
-        Toolbar tb(width, 120);
+        const Editor e(width, 1200, Document{}, tempPath("toolbar-fit.xopp"));
+        const Toolbar& tb = e.toolbar();
         int lastRight = 0;
         for (Action a : {Action::Pen, Action::Highlighter, Action::Eraser, Action::SizeFine, Action::SizeMedium,
                          Action::SizeThick, Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage,
@@ -450,7 +455,57 @@ TEST(editor_undo_redo) {
     CHECK(e.canvas().at(250, 500) < 128);
 }
 
-TEST(editor_erases_whole_strokes_and_undo_restores_order) {
+TEST(eraser_cuts_strokes) {
+    Stroke s;
+    s.width = 2;
+    for (int x = 0; x <= 100; x += 10) s.points.push_back({double(x), 0});
+    for (int i = 0; i < 10; ++i) s.segmentWidths.push_back(1 + i * 0.1);
+    s.extraAttrs = {{"capStyle", "round"}};
+    std::vector<Stroke> pieces;
+
+    // Missing it entirely.
+    CHECK(!eraseFromStroke(s, {50, 20}, {50, 20}, 5, pieces));
+
+    // A dot of radius 5 at x=50: cut where the centreline is within 5 + width/2.
+    CHECK(eraseFromStroke(s, {50, 0}, {50, 0}, 5, pieces));
+    CHECK(pieces.size() == 2);
+    if (pieces.size() == 2) {
+        const double w = s.segmentWidth(4);  // segment 40..50
+        CHECK_NEAR(pieces[0].points.front().x, 0, 1e-9);
+        CHECK_NEAR(pieces[0].points.back().x, 50 - (5 + w / 2), 1e-6);
+        CHECK_NEAR(pieces[1].points.front().x, 50 + (5 + s.segmentWidth(5) / 2), 1e-6);
+        CHECK_NEAR(pieces[1].points.back().x, 100, 1e-9);
+        for (const Stroke& p : pieces) {
+            CHECK(p.segmentWidths.size() + 1 == p.points.size());  // pressure kept per segment
+            CHECK(p.extraAttrs == s.extraAttrs);
+            CHECK_NEAR(p.width, 2, 1e-9);
+        }
+        CHECK_NEAR(pieces[1].segmentWidths.back(), s.segmentWidths.back(), 1e-9);
+    }
+
+    // A swipe across the stroke cuts it once, however fast the pen moved.
+    CHECK(eraseFromStroke(s, {30, -40}, {70, 40}, 3, pieces));
+    CHECK(pieces.size() == 2);
+    for (const Stroke& p : pieces) {
+        for (size_t i = 0; i + 1 < p.points.size(); ++i) {
+            const double reach = 3 + p.segmentWidth(i) / 2;
+            const double mid = (p.points[i].x + p.points[i + 1].x) / 2;
+            CHECK(distSqToSegment(mid, 0, 30, -40, 70, 40) >= reach * reach - 1e-6);
+        }
+    }
+
+    // Erasing over the start, the end, or all of it.
+    CHECK(eraseFromStroke(s, {0, 0}, {0, 0}, 5, pieces) && pieces.size() == 1);
+    CHECK(eraseFromStroke(s, {100, 0}, {100, 0}, 5, pieces) && pieces.size() == 1);
+    CHECK(eraseFromStroke(s, {0, 0}, {100, 0}, 5, pieces) && pieces.empty());
+
+    // A dot stroke (two equal points) goes entirely.
+    Stroke dot;
+    dot.points = {{10, 10}, {10, 10}};
+    CHECK(eraseFromStroke(dot, {11, 10}, {11, 10}, 2, pieces) && pieces.empty());
+}
+
+TEST(editor_eraser_cuts_strokes_and_undo_restores_them) {
     Editor e(900, 1200, Document{}, tempPath("erase.xopp"));
     uint64_t t = 0;
     drawLine(e, 100, 600, 400, t);
@@ -458,20 +513,32 @@ TEST(editor_erases_whole_strokes_and_undo_restores_order) {
     drawLine(e, 100, 600, 600, t);
     const auto& els = e.document().pages[0].layers.back().elements;
     CHECK(els.size() == 3);
-    const double middleY = std::get<Stroke>(els[1]).points[0].y;
+    const Stroke middle = std::get<Stroke>(els[1]);
 
-    // Eraser end of the pen, swiped across the middle stroke only.
-    e.penDown({300, 495, 0.5, true}, t += 10);
-    e.penMove({350, 505, 0.5, true}, t += 10);
+    // Eraser end of the pen, swiped across the middle stroke only: it's cut in two,
+    // in place, so the stacking order stays the same.
+    e.penDown({300, 470, 0.5, true}, t += 10);
+    e.penMove({320, 530, 0.5, true}, t += 10);
     e.penUp(t += 10);
-    CHECK(els.size() == 2);
+    CHECK(els.size() == 4);
     CHECK(e.tool() == ToolKind::Pen);  // the pen's eraser end doesn't change the selected tool
+    if (els.size() == 4) {
+        CHECK_NEAR(std::get<Stroke>(els[1]).points.front().y, middle.points.front().y, 1e-9);
+        CHECK_NEAR(std::get<Stroke>(els[2]).points.back().y, middle.points.back().y, 1e-9);
+        CHECK(std::get<Stroke>(els[1]).points.back().x < std::get<Stroke>(els[2]).points.front().x);
+    }
+    CHECK(e.canvas().at(310, 500) > 200);  // gone from the screen too
+    CHECK(e.canvas().at(200, 500) < 128);
 
     e.perform(Action::Undo, t += 10);
     CHECK(els.size() == 3);
-    CHECK_NEAR(std::get<Stroke>(els[1]).points[0].y, middleY, 1e-9);
+    if (els.size() == 3) {
+        const Stroke& restored = std::get<Stroke>(els[1]);
+        CHECK(restored.points.size() == middle.points.size());
+        CHECK_NEAR(restored.points.back().x, middle.points.back().x, 1e-9);
+    }
     e.perform(Action::Redo, t += 10);
-    CHECK(els.size() == 2);
+    CHECK(els.size() == 4);
 }
 
 TEST(editor_toolbar_and_palm_rejection) {
@@ -518,7 +585,7 @@ TEST(editor_saves_on_exit) {
         uint64_t t = 0;
         drawLine(e, 100, 300, 400, t);
         e.perform(Action::Exit, t += 10);
-        CHECK(e.quitRequested());
+        CHECK(e.closeRequested());
         CHECK(!e.modified());
     }
     Document d;
@@ -533,9 +600,9 @@ TEST(editor_exit_after_failed_save_needs_second_tap) {
     uint64_t t = 0;
     drawLine(e, 100, 300, 400, t);
     e.perform(Action::Exit, 1000);
-    CHECK(!e.quitRequested());
+    CHECK(!e.closeRequested());
     e.perform(Action::Exit, 2000);
-    CHECK(e.quitRequested());
+    CHECK(e.closeRequested());
 }
 
 TEST(editor_autosaves_when_idle) {
@@ -631,7 +698,7 @@ TEST(eink_panel_shows_what_the_editor_drew) {
     flush();
     e.onIdle(t += 1000);
     flush();
-    CHECK(e.document().pages[0].layers.back().elements.empty());
+    CHECK(e.document().pages[0].layers.back().elements.size() == 6);  // each stroke cut in two
     CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
 
     for (int i = 0; i < 4; ++i) {  // undo the erase, then all three strokes
@@ -641,6 +708,513 @@ TEST(eink_panel_shows_what_the_editor_drew) {
     e.onIdle(t += 1000);
     flush();
     CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+}
+
+// ---- notebook list and app ----
+
+namespace {
+
+std::string tempDir(const std::string& name) {
+    std::string pattern = tempPath(name + "-XXXXXX");
+    return mkdtemp(pattern.data()) ? pattern : std::string();
+}
+
+void removeDir(const std::string& dir) {
+    if (DIR* d = opendir(dir.c_str())) {
+        while (const dirent* e = readdir(d)) {
+            const std::string name = e->d_name;
+            if (name == "." || name == "..") continue;
+            const std::string path = dir + "/" + name;
+            if (std::remove(path.c_str()) != 0) removeDir(path);
+        }
+        closedir(d);
+    }
+    rmdir(dir.c_str());
+}
+
+void setMtime(const std::string& path, time_t t) {
+    const timeval tv[2] = {{t, 0}, {t, 0}};
+    utimes(path.c_str(), tv);
+}
+
+Document oneStrokeDocument() {
+    Document d;
+    d.pages.push_back(makeBlankPage(216, 260, "lined"));
+    Stroke s;
+    s.points = {{20, 100}, {120, 100}};
+    d.pages[0].layers[0].elements.push_back(s);
+    return d;
+}
+
+void writeIn(App& app, uint64_t& t) {
+    app.penDown({100, 500, 0.5, false}, t += 10);
+    app.penMove({300, 500, 0.5, false}, t += 10);
+    app.penUp(t += 10);
+}
+
+void tapButton(App& app, const Toolbar& tb, Action a, uint64_t& t) {
+    const IRect c = center(tb.buttonRect(a));
+    app.touchDown(c.x0, c.y0, t += 10);
+}
+
+void tapAt(App& app, const IRect& r, uint64_t& t) {
+    const IRect c = center(r);
+    app.touchDown(c.x0, c.y0, t += 10);
+}
+
+// Types lowercase letters, digits and spaces on the prompt's keyboard.
+void typeIn(App& app, const std::string& text, uint64_t& t) {
+    for (char ch : text) {
+        const IRect key = ch == ' ' ? app.library()->prompt().keyRect("SPACE")
+                                    : app.library()->prompt().keyRect(std::string(1, ch));
+        CHECK(!key.empty());
+        tapAt(app, key, t);
+    }
+}
+
+}  // namespace
+
+TEST(lists_notebooks_newest_first) {
+    const std::string dir = tempDir("list");
+    std::string err;
+    const Document doc = oneStrokeDocument();
+    for (const char* name : {"old.xopp", "new.xoj", "middle.XOPP", ".hidden.xopp"}) CHECK(saveXopp(dir + "/" + name, doc, err));
+    CHECK(writeFile(dir + "/notes.txt", "not a notebook", false));
+    CHECK(makeDirs(dir + "/folder.xopp"));
+    setMtime(dir + "/old.xopp", 1000);
+    setMtime(dir + "/middle.XOPP", 2000);
+    setMtime(dir + "/new.xoj", 3000);
+
+    const auto list = listNotebooks(dir);
+    CHECK(list.size() == 3);
+    if (list.size() == 3) {
+        CHECK(list[0].name == "new" && list[1].name == "middle" && list[2].name == "old");
+        CHECK(list[2].path == dir + "/old.xopp");
+        CHECK(list[0].bytes > 0);
+    }
+    CHECK(isNotebookFile(dir + "/not-yet-created.xopp"));
+    CHECK(!isNotebookFile(dir));
+
+    const time_t when = 1800000000;
+    const std::string first = newNotebookPath(dir, when);
+    CHECK(first.size() > 5 && first.compare(first.size() - 5, 5, ".xopp") == 0);
+    CHECK(saveXopp(first, doc, err));
+    const std::string second = newNotebookPath(dir, when);
+    CHECK(second != first && second.find(" (2).xopp") != std::string::npos);
+    removeDir(dir);
+}
+
+TEST(app_opens_notebooks_from_the_list_and_returns) {
+    const std::string dir = tempDir("app");
+    std::string err;
+    CHECK(saveXopp(dir + "/first.xopp", oneStrokeDocument(), err));
+    AppOptions o;
+    o.notebooksDir = dir;
+    App app(900, 1200, o);
+    CHECK(app.startupError().empty());
+    CHECK(app.library() && !app.editor());
+    CHECK(app.library()->notebooks().size() == 1);
+    app.takeDamage();
+
+    // Tapping a row highlights it first and opens it on the next idle pass, so the
+    // highlight reaches the screen before a large notebook loads.
+    uint64_t t = 1000;
+    const IRect row = app.library()->rowRect(0);
+    CHECK(!row.empty());
+    app.touchDown(row.x0 + 100, row.y0 + 20, t);
+    CHECK(hasMode(app.takeDamage(), Refresh::UI));
+    CHECK(app.msUntilIdleWork(t) == 0);
+    app.onIdle(t);
+    CHECK(!app.editor());
+    app.onIdle(t);
+    CHECK(app.editor() != nullptr);
+    if (!app.editor()) return removeDir(dir);
+    CHECK(app.editor()->document().pages[0].layers.back().elements.size() == 1);
+    CHECK(hasMode(app.takeDamage(), Refresh::Full));
+
+    // Write, then BACK: saved, and back on the list.
+    writeIn(app, t);
+    tapButton(app, app.editor()->toolbar(), Action::Exit, t);
+    CHECK(!app.editor() && !app.quitRequested());
+    Document saved;
+    CHECK(loadXopp(dir + "/first.xopp", saved, err));
+    CHECK(saved.pages.size() == 1 && saved.pages[0].layers.back().elements.size() == 2);
+
+    // NEW asks for a name. OK without typing uses the date and time (unique even
+    // twice in a minute); the notebook exists as soon as it's named.
+    for (size_t expected : {2, 3}) {
+        tapButton(app, app.library()->toolbar(), Action::NewNotebook, t);
+        CHECK(app.library()->prompting());
+        tapButton(app, app.library()->prompt().toolbar(), Action::Confirm, t);
+        CHECK(app.editor() && app.editor()->path().compare(0, dir.size(), dir) == 0);
+        app.perform(Action::Exit, t += 10);  // BACK without writing (keyboard shortcut path)
+        CHECK(app.library()->notebooks().size() == expected);
+    }
+
+    // A typed name, through the on-screen keyboard.
+    tapButton(app, app.library()->toolbar(), Action::NewNotebook, t);
+    typeIn(app, "physics 2", t);
+    app.perform(Action::Confirm, t += 10);
+    CHECK(app.editor() && app.editor()->path() == dir + "/Physics 2.xopp");
+    writeIn(app, t);
+    app.perform(Action::Exit, t += 10);
+    CHECK(app.library()->notebooks().size() == 4);
+
+    tapButton(app, app.library()->toolbar(), Action::Exit, t);
+    CHECK(app.quitRequested());
+    removeDir(dir);
+}
+
+TEST(app_reports_unreadable_notebooks) {
+    const std::string dir = tempDir("bad");
+    CHECK(writeFile(dir + "/broken.xopp", "this is not a notebook", false));
+    AppOptions o;
+    o.notebooksDir = dir;
+    App app(900, 1200, o);
+    const IRect row = app.library()->rowRect(0);
+    app.touchDown(row.x0 + 100, row.y0 + 20, 10);
+    app.onIdle(20);
+    app.onIdle(30);
+    CHECK(!app.editor());
+    CHECK(app.library()->message().find("Can't open") != std::string::npos);
+    CHECK(hasMode(app.takeDamage(), Refresh::Full));  // the highlight is gone again
+    removeDir(dir);
+}
+
+TEST(app_single_notebook_mode) {
+    AppOptions o;
+    o.file = tempPath("single.xopp");
+    App app(900, 1200, o);
+    CHECK(app.startupError().empty());
+    CHECK(app.editor() && !app.library());
+    uint64_t t = 0;
+    writeIn(app, t);
+    app.perform(Action::Exit, t += 10);
+    CHECK(app.quitRequested());
+    CHECK(access(o.file.c_str(), F_OK) == 0);
+    std::remove(o.file.c_str());
+
+    AppOptions bad;
+    bad.file = tempPath("unreadable.xopp");
+    CHECK(writeFile(bad.file, "garbage", false));
+    App broken(900, 1200, bad);
+    CHECK(!broken.startupError().empty());
+    std::remove(bad.file.c_str());
+}
+
+// ---- file manager ----
+
+namespace {
+
+size_t indexOf(Library& lib, const std::string& name) {
+    for (size_t i = 0; i < lib.notebooks().size(); ++i)
+        if (lib.notebooks()[i].name == name) return i;
+    return static_cast<size_t>(-1);
+}
+
+bool hasNotebook(Library& lib, const std::string& name) { return indexOf(lib, name) != static_cast<size_t>(-1); }
+
+}  // namespace
+
+TEST(notebook_names) {
+    CHECK(naturalLess("Lecture 2", "lecture 10"));
+    CHECK(!naturalLess("lecture 10", "Lecture 2"));
+    CHECK(naturalLess("file 007", "file 8"));
+    CHECK(naturalLess("abc", "ABD"));
+    CHECK(naturalLess("a", "ab"));
+    CHECK(!naturalLess("same", "same"));
+
+    std::string name, err;
+    CHECK(cleanNotebookName("  ..Physics notes.  ", name, err) && name == "Physics notes");
+    CHECK(!cleanNotebookName("   ", name, err));
+    CHECK(!cleanNotebookName("a/b", name, err));
+    CHECK(!cleanNotebookName("what?", name, err));
+    CHECK(!cleanNotebookName(std::string(121, 'x'), name, err));
+}
+
+TEST(notebook_file_operations_keep_attachments) {
+    const std::string dir = tempDir("ops");
+    std::string err, path;
+    const Document doc = oneStrokeDocument();
+    CHECK(saveXopp(dir + "/Lecture.xopp", doc, err));
+    CHECK(writeFile(dir + "/Lecture.xopp.bg.pdf", "%PDF attached background", false));
+    CHECK(saveXopp(dir + "/Lecturer.xopp", doc, err));  // a different notebook with a similar name
+    auto find = [&](const std::string& name) {
+        for (const auto& nb : listNotebooks(dir))
+            if (nb.name == name) return nb;
+        return NotebookInfo{};
+    };
+
+    CHECK(renameNotebook(find("Lecture"), "Physics", path, err));
+    CHECK(path == dir + "/Physics.xopp");
+    CHECK(access((dir + "/Physics.xopp.bg.pdf").c_str(), F_OK) == 0);
+    CHECK(access((dir + "/Lecture.xopp.bg.pdf").c_str(), F_OK) != 0);
+    CHECK(access((dir + "/Lecturer.xopp").c_str(), F_OK) == 0);
+    CHECK(!renameNotebook(find("Physics"), "Lecturer", path, err));  // taken
+    CHECK(renameNotebook(find("Physics"), "physics", path, err));    // case only
+
+    CHECK(duplicateNotebook(find("physics"), "Physics copy", path, err));
+    CHECK(access((dir + "/Physics copy.xopp").c_str(), F_OK) == 0);
+    CHECK(access((dir + "/Physics copy.xopp.bg.pdf").c_str(), F_OK) == 0);
+    CHECK(access((dir + "/physics.xopp").c_str(), F_OK) == 0);
+    CHECK(!duplicateNotebook(find("physics"), "Physics copy", path, err));
+
+    CHECK(trashNotebook(find("Physics copy"), err));
+    CHECK(access((dir + "/Physics copy.xopp").c_str(), F_OK) != 0);
+    CHECK(access((dir + "/Trash/Physics copy.xopp").c_str(), F_OK) == 0);
+    CHECK(access((dir + "/Trash/Physics copy.xopp.bg.pdf").c_str(), F_OK) == 0);
+    CHECK(duplicateNotebook(find("physics"), "Physics copy", path, err));  // trash it again: no clash
+    CHECK(trashNotebook(find("Physics copy"), err));
+    CHECK(access((dir + "/Trash/Physics copy (2).xopp").c_str(), F_OK) == 0);
+    CHECK(listNotebooks(dir).size() == 2);  // the Trash folder isn't listed
+    removeDir(dir);
+}
+
+TEST(text_prompt_typing) {
+    Canvas c(900, 1200);
+    TextPrompt p(900, 1200);
+    p.open(c, "NEW NOTEBOOK", "", "2026-11-02 14.30");
+    CHECK(p.value() == "2026-11-02 14.30");
+    auto tap = [&](const std::string& label) {
+        const IRect r = center(p.keyRect(label));
+        return p.tap(c, r.x0, r.y0);
+    };
+    tap("h");
+    tap("i");
+    CHECK(p.text() == "Hi");  // the first letter is capitalized
+    tap("SHIFT");
+    tap("x");
+    tap("x");
+    CHECK(p.text() == "HiXx");  // shift is for one letter
+    tap("DEL");
+    tap("SPACE");
+    tap("2");
+    CHECK(p.text() == "HiX 2");
+    CHECK(p.value() == "HiX 2");
+    tap("CLEAR");
+    CHECK(p.text().empty() && p.value() == "2026-11-02 14.30");
+    const IRect ok = center(p.toolbar().buttonRect(Action::Confirm));
+    CHECK(p.tap(c, ok.x0, ok.y0) == TextPrompt::Result::Done);
+    CHECK(p.perform(Action::Cancel) == TextPrompt::Result::Cancel);
+
+    int gray = 0;  // it's refreshed with DU, so it must be pure black and white
+    for (int y = 0; y < c.height(); ++y)
+        for (int x = 0; x < c.width(); ++x) gray += c.at(x, y) != 0 && c.at(x, y) != 255;
+    CHECK(gray == 0);
+}
+
+TEST(library_menu_rename_duplicate_delete) {
+    const std::string dir = tempDir("menu");
+    std::string err;
+    CHECK(saveXopp(dir + "/Notes.xopp", oneStrokeDocument(), err));
+    CHECK(saveXopp(dir + "/Lecture.xopp", oneStrokeDocument(), err));
+    AppOptions o;
+    o.notebooksDir = dir;
+    App app(900, 1200, o);
+    Library& lib = *app.library();
+    EinkPanel panel(900, 1200);
+    auto flush = [&] {
+        for (const Damage& d : app.takeDamage()) panel.refresh(app.canvas(), d);
+    };
+    flush();
+    uint64_t t = 0;
+
+    // The "..." button opens the menu; tapping outside it closes it again.
+    tapAt(app, lib.menuRect(indexOf(lib, "Lecture")), t);
+    flush();
+    CHECK(!lib.dialogButton(Action::Rename).empty());
+    CHECK(!app.editor());
+    app.touchDown(5, 1195, t += 10);
+    flush();
+    CHECK(lib.dialogButton(Action::Rename).empty());
+
+    // Rename through the keyboard.
+    tapAt(app, lib.menuRect(indexOf(lib, "Lecture")), t);
+    tapAt(app, lib.dialogButton(Action::Rename), t);
+    flush();
+    CHECK(lib.prompting() && lib.prompt().text() == "Lecture");
+    tapAt(app, lib.prompt().keyRect("CLEAR"), t);
+    typeIn(app, "physics", t);
+    tapButton(app, lib.prompt().toolbar(), Action::Confirm, t);
+    flush();
+    CHECK(!lib.prompting());
+    CHECK(hasNotebook(lib, "Physics") && !hasNotebook(lib, "Lecture"));
+
+    // A name that's taken keeps the prompt open.
+    tapAt(app, lib.menuRect(indexOf(lib, "Physics")), t);
+    tapAt(app, lib.dialogButton(Action::Rename), t);
+    tapAt(app, lib.prompt().keyRect("CLEAR"), t);
+    typeIn(app, "notes", t);
+    tapButton(app, lib.prompt().toolbar(), Action::Confirm, t);
+    CHECK(lib.prompting());
+    tapButton(app, lib.prompt().toolbar(), Action::Cancel, t);
+    flush();
+    CHECK(!lib.prompting() && hasNotebook(lib, "Physics"));
+
+    // Duplicate suggests "<name> copy".
+    tapAt(app, lib.menuRect(indexOf(lib, "Physics")), t);
+    tapAt(app, lib.dialogButton(Action::Duplicate), t);
+    CHECK(lib.prompt().text() == "Physics copy");
+    tapButton(app, lib.prompt().toolbar(), Action::Confirm, t);
+    flush();
+    CHECK(lib.notebooks().size() == 3 && hasNotebook(lib, "Physics copy"));
+
+    // Delete asks first, then moves it to the Trash folder.
+    tapAt(app, lib.menuRect(indexOf(lib, "Notes")), t);
+    tapAt(app, lib.dialogButton(Action::Delete), t);
+    flush();
+    CHECK(!lib.dialogButton(Action::Confirm).empty());
+    CHECK(hasNotebook(lib, "Notes"));
+    tapAt(app, lib.dialogButton(Action::Confirm), t);
+    flush();
+    CHECK(!hasNotebook(lib, "Notes"));
+    CHECK(access((dir + "/Trash/Notes.xopp").c_str(), F_OK) == 0);
+    CHECK(lib.message().find("Trash") != std::string::npos);
+
+    // All of it is black and white, so the fast refreshes left nothing stale.
+    CHECK_NEAR(panelMismatches(panel, app.canvas()), 0, 0);
+    removeDir(dir);
+}
+
+TEST(library_sort_order_is_remembered) {
+    const std::string dir = tempDir("sort");
+    std::string err;
+    for (const char* n : {"Lecture 10", "Lecture 2", "algebra"}) CHECK(saveXopp(dir + "/" + n + ".xopp", oneStrokeDocument(), err));
+    setMtime(dir + "/Lecture 10.xopp", 3000);
+    setMtime(dir + "/Lecture 2.xopp", 2000);
+    setMtime(dir + "/algebra.xopp", 1000);
+    AppOptions o;
+    o.notebooksDir = dir;
+    {
+        App app(900, 1200, o);
+        CHECK(app.library()->notebooks()[0].name == "Lecture 10");
+        uint64_t t = 0;
+        tapButton(app, app.library()->toolbar(), Action::Sort, t);
+        const auto& nbs = app.library()->notebooks();
+        CHECK(nbs[0].name == "algebra" && nbs[1].name == "Lecture 2" && nbs[2].name == "Lecture 10");
+    }
+    App again(900, 1200, o);
+    CHECK(again.library()->order() == NotebookOrder::Name);
+    CHECK(again.library()->notebooks()[0].name == "algebra");
+    removeDir(dir);
+}
+
+// ---- follow-ups from the device: eraser modes, EXIT from a notebook, menu feedback ----
+
+TEST(editor_toolbar_with_back_and_exit_fits) {
+    EditorOptions o;
+    o.fromList = true;
+    for (int width : {1072, 1236, 1860, 1986}) {  // Kindle screen widths
+        const Editor e(width, 2400, Document{}, tempPath("toolbar-list.xopp"), o);
+        int lastRight = 0;
+        for (Action a : {Action::Pen, Action::Highlighter, Action::Eraser, Action::SizeFine, Action::SizeMedium,
+                         Action::SizeThick, Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage,
+                         Action::Save, Action::Exit, Action::Quit}) {
+            const IRect r = e.toolbar().buttonRect(a);
+            CHECK(!r.empty() && r.x0 >= lastRight && r.x1 <= width);
+            lastRight = r.x1;
+        }
+    }
+}
+
+TEST(eraser_can_remove_whole_strokes) {
+    Editor e(900, 1200, Document{}, tempPath("whole.xopp"));
+    uint64_t t = 0;
+    drawLine(e, 100, 600, 400, t);
+    drawLine(e, 100, 600, 500, t);
+    const auto& els = e.document().pages[0].layers.back().elements;
+
+    // Selecting ERASE, then tapping it again, switches to whole strokes.
+    e.perform(Action::Eraser, t += 10);
+    CHECK(!e.eraseWholeStrokes());
+    e.perform(Action::Eraser, t += 10);
+    CHECK(e.eraseWholeStrokes() && e.tool() == ToolKind::Eraser);
+
+    e.penDown({300, 480, 0.5, false}, t += 10);  // touches the middle of the second stroke only
+    e.penMove({310, 520, 0.5, false}, t += 10);
+    e.penUp(t += 10);
+    CHECK(els.size() == 1);
+    CHECK(e.canvas().at(550, 500) > 200);  // all of it is gone, not just the touched part
+    e.perform(Action::Undo, t += 10);
+    CHECK(els.size() == 2);
+
+    // The pen's eraser end follows the same setting, even with the pen tool selected.
+    e.perform(Action::Pen, t += 10);
+    e.penDown({300, 380, 0.5, true}, t += 10);
+    e.penMove({310, 420, 0.5, true}, t += 10);
+    e.penUp(t += 10);
+    CHECK(els.size() == 1);
+
+    // And back to cutting.
+    e.perform(Action::Eraser, t += 10);
+    e.perform(Action::Eraser, t += 10);
+    CHECK(!e.eraseWholeStrokes());
+}
+
+TEST(app_exit_from_a_notebook_and_remembered_eraser) {
+    const std::string dir = tempDir("quit");
+    std::string err;
+    CHECK(saveXopp(dir + "/One.xopp", oneStrokeDocument(), err));
+    CHECK(saveXopp(dir + "/Two.xopp", oneStrokeDocument(), err));
+    AppOptions o;
+    o.notebooksDir = dir;
+    uint64_t t = 0;
+    auto open = [&](App& app, const std::string& name) {
+        tapAt(app, app.library()->rowRect(indexOf(*app.library(), name)), t);
+        app.onIdle(t);
+        app.onIdle(t);
+        CHECK(app.editor() != nullptr);
+    };
+    {
+        App app(900, 1200, o);
+        open(app, "One");
+        if (!app.editor()) return removeDir(dir);
+        CHECK(!app.editor()->toolbar().buttonRect(Action::Quit).empty());
+        // Switch the eraser to whole strokes; BACK; another notebook starts that way.
+        tapButton(app, app.editor()->toolbar(), Action::Eraser, t);
+        tapButton(app, app.editor()->toolbar(), Action::Eraser, t);
+        CHECK(app.editor()->eraseWholeStrokes());
+        tapButton(app, app.editor()->toolbar(), Action::Exit, t);
+        open(app, "Two");
+        if (!app.editor()) return removeDir(dir);
+        CHECK(app.editor()->eraseWholeStrokes());
+        // EXIT saves and leaves the app straight from the notebook.
+        tapButton(app, app.editor()->toolbar(), Action::Pen, t);
+        writeIn(app, t);
+        tapButton(app, app.editor()->toolbar(), Action::Quit, t);
+        CHECK(app.quitRequested());
+        Document saved;
+        CHECK(loadXopp(dir + "/Two.xopp", saved, err) && saved.pages[0].layers.back().elements.size() == 2);
+    }
+    App again(900, 1200, o);  // and after a restart
+    open(again, "One");
+    if (again.editor()) CHECK(again.editor()->eraseWholeStrokes());
+    removeDir(dir);
+}
+
+TEST(library_menu_button_shows_it_was_pressed) {
+    const std::string dir = tempDir("pressed");
+    std::string err;
+    for (int i = 0; i < 13; ++i) CHECK(saveXopp(dir + "/N" + std::to_string(i) + ".xopp", oneStrokeDocument(), err));
+    AppOptions o;
+    o.notebooksDir = dir;
+    App app(1860, 2480, o);  // the Scribe's screen: a full page of 13 rows
+    Library& lib = *app.library();
+    uint64_t t = 0;
+    CHECK(!lib.rowRect(12).empty());
+    for (size_t row : {size_t(0), size_t(12)}) {  // the menu goes below the first row, above the last
+        const IRect m = lib.menuRect(row);
+        CHECK(app.canvas().at(m.x0 + 10, m.y0 + 10) == 255);
+        tapAt(app, m, t);
+        CHECK(app.canvas().at(m.x0 + 10, m.y0 + 10) == 0);  // inverted while the menu is open
+        CHECK(!lib.dialogRect().empty());
+        CHECK(lib.dialogRect().intersected(lib.rowRect(row)).empty());  // doesn't cover the tapped row
+        tapAt(app, lib.dialogButton(Action::Delete), t);
+        CHECK(app.canvas().at(m.x0 + 10, m.y0 + 10) == 0);  // still, while confirming
+        tapAt(app, lib.dialogButton(Action::Cancel), t);
+        CHECK(app.canvas().at(m.x0 + 10, m.y0 + 10) == 255);
+    }
+    removeDir(dir);
 }
 
 int main() {

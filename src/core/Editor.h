@@ -40,8 +40,15 @@ struct PenSample {
     bool eraser = false;    // eraser end of the pen (or side button held)
 };
 
+enum class ToolKind { Pen, Highlighter, Eraser };
+enum class ToolSize { Fine, Medium, Thick };
+
 struct EditorOptions {
     RenderStyle render;  // the Kindle turns antialiasing off (see RenderStyle)
+    // Opened from the notebook list: the toolbar then has BACK (to the list) and
+    // EXIT (leave the app); otherwise just EXIT.
+    bool fromList = false;
+    bool eraseWholeStrokes = false;  // eraser mode to start in
     int toolbarHeight = 120;
     double dpi = 300;  // sizes new notebooks so a page fills the screen
     std::string pageStyle = "lined";
@@ -60,7 +67,11 @@ public:
     size_t pageIndex() const { return page_; }
     ToolKind tool() const { return tool_; }
     bool modified() const { return modified_; }
-    bool quitRequested() const { return quit_; }
+    bool eraseWholeStrokes() const { return eraseWhole_; }
+    // BACK or EXIT was tapped and the notebook is saved (or the user chose to leave
+    // it unsaved). quitRequested() tells EXIT (leave the app) from BACK.
+    bool closeRequested() const { return close_; }
+    bool quitRequested() const { return close_ && quit_; }
 
     void redrawAll(Refresh mode = Refresh::Full);
 
@@ -80,14 +91,21 @@ public:
     std::vector<Damage> takeDamage();
 
 private:
+    // One step of a change to a layer. Replaying the steps in order redoes the
+    // change; undoing them in reverse order restores the exact previous state.
+    // `element` holds whatever is currently out of the document: the removed
+    // element of an applied removal, or the element of an undone insertion.
+    struct ElementEdit {
+        bool insert;
+        size_t index;
+        Element element;
+    };
     struct UndoAction {
-        enum class Kind { AddStroke, Erase, AddPage } kind = Kind::AddStroke;
+        enum class Kind { Edit, AddPage } kind = Kind::Edit;
         size_t page = 0;
         size_t layer = 0;
-        // AddStroke: the stroke's index (element filled while undone).
-        // Erase: each removal in order, with the index it was removed from.
-        std::vector<std::pair<size_t, Element>> items;
-        std::optional<Page> pageData;  // AddPage: filled while undone
+        std::vector<ElementEdit> edits;  // Edit: drawing a stroke, or an eraser gesture
+        std::optional<Page> pageData;    // AddPage: filled while undone
     };
     enum class Gesture { None, Draw, Erase, Toolbar };
 
@@ -100,7 +118,8 @@ private:
 
     void setPage(size_t index);
     void addPage(uint64_t now);
-    void eraseAt(const PenSample& s);
+    void eraseAt(const PenSample& s, uint64_t now);
+    void previewErase(const IRect& r, uint64_t now);
     void commitStroke(uint64_t now);
     void pushUndo(UndoAction a);
     void undo(uint64_t now);
@@ -127,10 +146,12 @@ private:
 
     ToolKind tool_ = ToolKind::Pen;
     ToolSize size_ = ToolSize::Medium;
+    bool eraseWhole_ = false;  // eraser removes whole strokes instead of cutting them
     Gesture gesture_ = Gesture::None;
     Stroke live_;
     std::vector<double> livePointWidths_;
     UndoAction pendingErase_;
+    std::optional<StrokePoint> eraserLast_;  // previous eraser position in this gesture
 
     std::vector<UndoAction> undo_, redo_;
     bool modified_ = false;
@@ -141,6 +162,7 @@ private:
     std::string status_;
     uint64_t statusUntil_ = 0;
     uint64_t exitArmedUntil_ = 0;
+    bool close_ = false;
     bool quit_ = false;
 
     std::vector<Damage> damage_;

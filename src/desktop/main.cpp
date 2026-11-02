@@ -1,30 +1,33 @@
 // Desktop front end (SDL3) for developing without a Kindle. It runs the same
-// Editor at the Scribe's resolution in a scaled-down window, and by default
+// App at the Scribe's resolution in a scaled-down window, and by default
 // imitates the e-ink panel (see EinkPanel): hard-edged ink, and refresh
 // artifacts such as DU leaving gray pixels unchanged show up as on the device.
 //
-//   xscribe-desktop [notebook.xopp] [--size 1860x2480] [--no-eink-sim]
+//   xscribe-desktop [FOLDER | notebook.xopp] [--size 1860x2480] [--no-eink-sim]
 //
+// A folder (default ~/Documents/Xournal-Scribe) opens the notebook list; a
+// .xopp/.xoj file opens just that notebook.
 // Mouse: left = pen, right = eraser. A drawing tablet gets real pressure.
 // Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, Cmd/Ctrl+S save,
-//       P/H/E pen/highlighter/eraser, 1/2/3 sizes, Left/Right pages, Esc quit.
+//       P/H/E pen/highlighter/eraser, 1/2/3 sizes, Left/Right pages,
+//       N new notebook (in the list), Esc back/quit.
 
 #include <SDL3/SDL.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "Editor.h"
+#include "App.h"
 #include "EinkPanel.h"
-#include "XoppFile.h"
 
 namespace {
 
 struct Args {
-    std::string path = "notebook.xopp";
+    std::string path;
     int width = 1860, height = 2480;  // Kindle Scribe (1st/2nd gen)
     bool einkSim = true;
 };
@@ -124,55 +127,58 @@ private:
 int main(int argc, char** argv) {
     Args args;
     if (!parseArgs(argc, argv, args)) {
-        std::fprintf(stderr, "usage: %s [notebook.xopp] [--size WxH] [--no-eink-sim]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s [FOLDER | notebook.xopp] [--size WxH] [--no-eink-sim]\n", argv[0]);
         return 2;
     }
+    if (args.path.empty()) {
+        const char* home = std::getenv("HOME");
+        args.path = std::string(home ? home : ".") + "/Documents/Xournal-Scribe";
+    }
 
-    xs::Document doc;
-    if (FILE* f = std::fopen(args.path.c_str(), "rb")) {
-        std::fclose(f);
-        std::string error;
-        std::vector<std::string> warnings;
-        if (!xs::loadXopp(args.path, doc, error, &warnings)) {
-            std::fprintf(stderr, "%s: %s\n", args.path.c_str(), error.c_str());
-            return 1;
-        }
-        for (const auto& w : warnings) std::fprintf(stderr, "%s: warning: %s\n", args.path.c_str(), w.c_str());
+    xs::AppOptions aopts;
+    aopts.editor.render.antialias = !args.einkSim;  // like the Kindle: hard-edged ink
+    if (xs::isNotebookFile(args.path)) aopts.file = args.path;
+    else aopts.notebooksDir = args.path;
+    xs::App app(args.width, args.height, aopts);
+    if (!app.startupError().empty()) {
+        std::fprintf(stderr, "%s\n", app.startupError().c_str());
+        return 1;
     }
 
     Window win;
     if (!win.open(args.width, args.height, args.einkSim)) return 1;
-    xs::EditorOptions eopts;
-    eopts.render.antialias = !args.einkSim;  // like the Kindle: hard-edged ink
-    xs::Editor editor(args.width, args.height, std::move(doc), args.path, eopts);
-    win.present(editor.canvas(), editor.takeDamage());
+    win.present(app.canvas(), app.takeDamage());
 
     bool mouseDrawing = false;
     float penPressure = 0.5f;
-    while (!editor.quitRequested()) {
-        const int wait = editor.msUntilIdleWork(SDL_GetTicks());
+    bool closing = false;
+    while (!closing && !app.quitRequested()) {
+        const int wait = app.msUntilIdleWork(SDL_GetTicks());
         SDL_Event ev;
         bool got = wait < 0 ? SDL_WaitEvent(&ev) : SDL_WaitEventTimeout(&ev, wait);
         while (got) {
             const uint64_t now = SDL_GetTicks();
             double x = 0, y = 0;
             switch (ev.type) {
-                case SDL_EVENT_QUIT: editor.perform(xs::Action::Exit, now); break;
+                case SDL_EVENT_QUIT:
+                    // Window closed: save and leave from wherever we are.
+                    if (app.saveNow(now)) closing = true;
+                    break;
 
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     if (ev.button.button != SDL_BUTTON_LEFT && ev.button.button != SDL_BUTTON_RIGHT) break;
                     win.toCanvas(ev.button.x, ev.button.y, x, y);
-                    editor.penDown({x, y, 0.5, ev.button.button == SDL_BUTTON_RIGHT}, now);
+                    app.penDown({x, y, 0.5, ev.button.button == SDL_BUTTON_RIGHT}, now);
                     mouseDrawing = true;
                     break;
                 case SDL_EVENT_MOUSE_MOTION:
                     if (!mouseDrawing) break;
                     win.toCanvas(ev.motion.x, ev.motion.y, x, y);
-                    editor.penMove({x, y, 0.5, false}, now);
+                    app.penMove({x, y, 0.5, false}, now);
                     break;
                 case SDL_EVENT_MOUSE_BUTTON_UP:
                     if (!mouseDrawing) break;
-                    editor.penUp(now);
+                    app.penUp(now);
                     mouseDrawing = false;
                     break;
 
@@ -181,14 +187,14 @@ int main(int argc, char** argv) {
                     break;
                 case SDL_EVENT_PEN_DOWN:
                     win.toCanvas(ev.ptouch.x, ev.ptouch.y, x, y);
-                    editor.penDown({x, y, penPressure, ev.ptouch.eraser}, now);
+                    app.penDown({x, y, penPressure, ev.ptouch.eraser}, now);
                     break;
                 case SDL_EVENT_PEN_MOTION:
                     if (!(ev.pmotion.pen_state & SDL_PEN_INPUT_DOWN)) break;
                     win.toCanvas(ev.pmotion.x, ev.pmotion.y, x, y);
-                    editor.penMove({x, y, penPressure, (ev.pmotion.pen_state & SDL_PEN_INPUT_ERASER_TIP) != 0}, now);
+                    app.penMove({x, y, penPressure, (ev.pmotion.pen_state & SDL_PEN_INPUT_ERASER_TIP) != 0}, now);
                     break;
-                case SDL_EVENT_PEN_UP: editor.penUp(now); break;
+                case SDL_EVENT_PEN_UP: app.penUp(now); break;
 
                 case SDL_EVENT_KEY_DOWN: {
                     const bool cmd = ev.key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL);
@@ -206,19 +212,21 @@ int main(int argc, char** argv) {
                         case SDLK_3: a = xs::Action::SizeThick; break;
                         case SDLK_LEFT: a = xs::Action::PrevPage; break;
                         case SDLK_RIGHT: a = xs::Action::NextPage; break;
+                        case SDLK_N: if (!cmd) a = xs::Action::NewNotebook; break;
+                        case SDLK_RETURN: a = xs::Action::Confirm; break;
                         case SDLK_ESCAPE: a = xs::Action::Exit; break;
                         default: break;
                     }
-                    editor.perform(a, now);
+                    app.perform(a, now);
                     break;
                 }
-                case SDL_EVENT_WINDOW_EXPOSED: editor.redrawAll(xs::Refresh::Content); break;
+                case SDL_EVENT_WINDOW_EXPOSED: app.redrawAll(xs::Refresh::Content); break;
                 default: break;
             }
             got = SDL_PollEvent(&ev);
         }
-        editor.onIdle(SDL_GetTicks());
-        win.present(editor.canvas(), editor.takeDamage());
+        app.onIdle(SDL_GetTicks());
+        win.present(app.canvas(), app.takeDamage());
     }
     return 0;
 }

@@ -12,6 +12,10 @@ option(XS_BUILD_DESKTOP "Build the SDL3 desktop front end (for development)" ON)
 option(XS_BUILD_TESTS "Build the tests and the xopp-render tool" ON)
 option(XS_BUILD_KINDLE "Build the Kindle front end (cross-compile; needs FBINK_DIR)" OFF)
 
+# 64-bit stat()/readdir() on 32-bit Linux (the Kindle): without it they fail with
+# EOVERFLOW on filesystems with large inode numbers, and the notebook list comes up empty.
+add_compile_definitions(_FILE_OFFSET_BITS=64)
+
 if(XS_BUILD_KINDLE)
   # The firmware's libstdc++ is older than the toolchain's, so every binary carries its own.
   add_link_options(-static-libstdc++ -static-libgcc)
@@ -35,12 +39,17 @@ function(xs_warnings target)
 endfunction()
 
 add_library(xscribe_core STATIC
+  src/core/App.cpp
   src/core/Canvas.cpp
   src/core/Document.cpp
   src/core/Editor.cpp
   src/core/EinkPanel.cpp
+  src/core/Eraser.cpp
+  src/core/Library.cpp
   src/core/Png.cpp
   src/core/Renderer.cpp
+  src/core/Settings.cpp
+  src/core/TextPrompt.cpp
   src/core/Toolbar.cpp
   src/core/XoppFile.cpp)
 target_include_directories(xscribe_core PUBLIC src/core)

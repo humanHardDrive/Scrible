@@ -2,7 +2,9 @@
 // Meant to be started by kindle/run.sh (from a library scriptlet), which gets
 // the Kindle's own UI out of the way first and restores it afterwards.
 //
-//   xscribe [notebook.xopp] [options]
+//   xscribe [NOTEBOOKS-FOLDER | notebook.xopp] [options]
+//     A folder (default /mnt/us/xournal-scribe/notebooks) opens the notebook list;
+//     a .xopp/.xoj file opens just that notebook.
 //     --pen DEV, --touch DEV     input devices (default: auto-detect)
 //     --pen-transform SPEC       axis fix-ups, e.g. "swap,flipx" (swap is applied first)
 //     --touch-transform SPEC     (default: FBInk's quirks for this device)
@@ -23,11 +25,10 @@
 #include <string>
 #include <vector>
 
-#include "Editor.h"
+#include "App.h"
 #include "EvdevInput.h"
 #include "FbinkDisplay.h"
 #include "PowerEvents.h"
-#include "XoppFile.h"
 
 namespace {
 
@@ -41,7 +42,7 @@ uint64_t nowMs() {
 }
 
 struct Args {
-    std::string path = "/mnt/us/xournal-scribe/notebook.xopp";
+    std::string path = "/mnt/us/xournal-scribe/notebooks";
     std::string penDev, touchDev;
     std::string penTransform, touchTransform;
     bool grab = true;
@@ -195,7 +196,7 @@ int main(int argc, char** argv) {
     Args args;
     if (!parseArgs(argc, argv, args)) {
         std::fprintf(stderr,
-                     "usage: %s [notebook.xopp] [--pen DEV] [--touch DEV] [--pen-transform SPEC]\n"
+                     "usage: %s [FOLDER | notebook.xopp] [--pen DEV] [--touch DEV] [--pen-transform SPEC]\n"
                      "          [--touch-transform SPEC] [--no-grab] [--no-pen-mode] [--probe [SECONDS]]\n",
                      argv[0]);
         return 2;
@@ -231,20 +232,6 @@ int main(int argc, char** argv) {
 
     if (args.probeSeconds >= 0) return probe(display, args, penT, touchT);
 
-    // Load the notebook, or start a new one if the file doesn't exist yet.
-    xs::Document doc;
-    if (access(args.path.c_str(), F_OK) == 0) {
-        std::string error;
-        std::vector<std::string> warnings;
-        if (!xs::loadXopp(args.path, doc, error, &warnings)) {
-            std::fprintf(stderr, "xscribe: %s: %s\n", args.path.c_str(), error.c_str());
-            showMessage(display, {"Can't open notebook:", args.path, error, "", "The file was not changed."});
-            sleep(6);
-            return 1;
-        }
-        for (const auto& w : warnings) std::fprintf(stderr, "xscribe: %s: %s\n", args.path.c_str(), w.c_str());
-    }
-
     const auto devices = xs::scanInputDevices();
     const auto* penInfo = xs::pickPen(devices);
     const auto* touchInfo = xs::pickTouch(devices);
@@ -262,22 +249,30 @@ int main(int argc, char** argv) {
     }
     if (touchPath.empty() || !touch.open(touchPath, display.width(), display.height(), touchT, args.grab, err))
         std::fprintf(stderr, "xscribe: no touch input (%s); the toolbar still works with the pen\n", err.c_str());
-    std::fprintf(stderr, "xscribe: pen %s, touch %s, notebook %s\n", penPath.c_str(),
+    std::fprintf(stderr, "xscribe: pen %s, touch %s, opening %s\n", penPath.c_str(),
                  touch.fd() >= 0 ? touchPath.c_str() : "(none)", args.path.c_str());
 
-    xs::EditorOptions eopts;
-    eopts.dpi = display.dpi();
-    eopts.render.antialias = false;  // what DU shows while writing is then exactly the final stroke
-    xs::Editor editor(display.width(), display.height(), std::move(doc), args.path, eopts);
-    display.present(editor.canvas(), editor.takeDamage());
+    xs::AppOptions aopts;
+    aopts.editor.dpi = display.dpi();
+    aopts.editor.render.antialias = false;  // what DU shows while writing is then exactly the final stroke
+    if (xs::isNotebookFile(args.path)) aopts.file = args.path;
+    else aopts.notebooksDir = args.path;
+    xs::App app(display.width(), display.height(), aopts);
+    if (!app.startupError().empty()) {
+        std::fprintf(stderr, "xscribe: %s\n", app.startupError().c_str());
+        showMessage(display, {"Can't open:", args.path, app.startupError(), "", "Nothing was changed."});
+        sleep(6);
+        return 1;
+    }
+    display.present(app.canvas(), app.takeDamage());
 
     std::vector<xs::PenEvent> penEvents;
     std::vector<xs::TouchEvent> touchEvents;
     PressureStats stats;
-    while (!g_quit && !editor.quitRequested()) {
+    while (!g_quit && !app.quitRequested()) {
         pollfd fds[4] = {{pen.fd(), POLLIN, 0}, {touch.fd(), POLLIN, 0}, {power.fd(), POLLIN, 0},
                          {pen.pressureFd(), POLLIN, 0}};
-        if (poll(fds, 4, editor.msUntilIdleWork(nowMs())) < 0 && errno != EINTR) {
+        if (poll(fds, 4, app.msUntilIdleWork(nowMs())) < 0 && errno != EINTR) {
             std::perror("xscribe: poll");
             break;
         }
@@ -290,30 +285,28 @@ int main(int argc, char** argv) {
             if (e.type != xs::PenEvent::Type::Up) stats.add(e.pressure);
             const xs::PenSample s{e.x, e.y, e.pressure, e.eraser};
             switch (e.type) {
-                case xs::PenEvent::Type::Down: editor.penDown(s, now); break;
-                case xs::PenEvent::Type::Move: editor.penMove(s, now); break;
-                case xs::PenEvent::Type::Up: editor.penUp(now); break;
+                case xs::PenEvent::Type::Down: app.penDown(s, now); break;
+                case xs::PenEvent::Type::Move: app.penMove(s, now); break;
+                case xs::PenEvent::Type::Up: app.penUp(now); break;
             }
         }
 
         touchEvents.clear();
         if (fds[1].revents & POLLIN) touch.read(touchEvents);
         for (const auto& e : touchEvents)
-            if (e.type == xs::TouchEvent::Type::Down)
-                editor.touchDown(static_cast<int>(e.x), static_cast<int>(e.y), now);
+            if (e.type == xs::TouchEvent::Type::Down) app.touchDown(static_cast<int>(e.x), static_cast<int>(e.y), now);
 
         if (fds[2].revents & (POLLIN | POLLHUP)) {
             for (const auto ev : power.read()) {
-                if (ev == xs::PowerEvents::Event::GoingToSleep && editor.modified()) editor.save(now, true);
-                if (ev == xs::PowerEvents::Event::WokeUp) editor.redrawAll(xs::Refresh::Full);
+                if (ev == xs::PowerEvents::Event::GoingToSleep) app.saveNow(now);
+                if (ev == xs::PowerEvents::Event::WokeUp) app.redrawAll(xs::Refresh::Full);
             }
         }
 
-        editor.onIdle(now);
-        display.present(editor.canvas(), editor.takeDamage());
+        app.onIdle(now);
+        display.present(app.canvas(), app.takeDamage());
     }
 
     stats.log(pen);
-    if (editor.modified() && !editor.save(nowMs(), true)) return 1;
-    return 0;
+    return app.saveNow(nowMs()) ? 0 : 1;
 }

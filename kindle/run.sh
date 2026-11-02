@@ -6,7 +6,7 @@
 # e.g. `run.sh --probe 30`.
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-NOTEBOOK="${APP_DIR}/notebook.xopp"
+NOTEBOOKS="${APP_DIR}/notebooks"
 LOG="${APP_DIR}/xscribe.log"
 FB_DUMP="/var/tmp/xscribe-fb.dump"
 
@@ -15,6 +15,11 @@ if [ -f "${LOG}" ]; then
 fi
 exec >>"${LOG}" 2>&1
 echo "=== $(date) starting $*"
+
+# Version 0.1 kept a single notebook next to the app; move it into the notebook list.
+if [ -f "${APP_DIR}/notebook.xopp" ] && [ ! -e "${NOTEBOOKS}/notebook.xopp" ]; then
+    mkdir -p "${NOTEBOOKS}" && mv "${APP_DIR}/notebook.xopp" "${NOTEBOOKS}/notebook.xopp"
+fi
 
 STATUSBAR_STOPPED=no
 RESTORED=no
@@ -48,7 +53,7 @@ lipc-set-prop com.lab126.powerd preventScreenSaver 1
 
 # Copying over USB/MTP can drop the executable bit.
 chmod +x "${APP_DIR}/bin/xscribe" 2>/dev/null
-"${APP_DIR}/bin/xscribe" "${NOTEBOOK}" "$@"
+"${APP_DIR}/bin/xscribe" "${NOTEBOOKS}" "$@"
 echo "=== exited with status $?"
 
 restore

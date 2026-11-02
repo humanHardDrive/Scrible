@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+#include "Eraser.h"
 #include "XoppFile.h"
 
 namespace xs {
@@ -16,32 +17,33 @@ constexpr double kPenWidths[] = {0.85, 1.41, 2.26};
 constexpr double kHighlighterWidths[] = {2.83, 8.50, 19.84};
 constexpr double kEraserWidths[] = {2.83, 8.50, 19.84};
 
+ToolbarGroups editorToolbar(bool fromList) {
+    ToolbarGroups g = {
+        // "STROKE" is the eraser's label in whole-stroke mode; the button is sized for it.
+        {{Action::Pen, "PEN"}, {Action::Highlighter, "MARK"}, {Action::Eraser, "STROKE"}},
+        {{Action::SizeFine, "S"}, {Action::SizeMedium, "M"}, {Action::SizeThick, "L"}},
+        {{Action::Undo, "UNDO"}, {Action::Redo, "REDO"}},
+        {{Action::PrevPage, "<"}, {Action::None, "000/000"}, {Action::NextPage, ">"}},
+        {{Action::Save, "SAVE*"}},
+    };
+    if (fromList) g.back().insert(g.back().end(), {{Action::Exit, "BACK"}, {Action::Quit, "EXIT"}});
+    else g.back().push_back({Action::Exit, "EXIT"});
+    return g;
+}
+
 constexpr uint32_t kPenColor = 0x000000;
 constexpr uint32_t kHighlighterColor = 0xffff00;  // e-ink shows gray; the desktop shows yellow
-
-bool strokeHit(const Stroke& s, double x, double y, double r) {
-    RectF probe;
-    probe.add(x, y);
-    probe.grow(r);
-    if (!s.bounds().intersects(probe)) return false;
-    for (size_t i = 0; i + 1 < s.points.size(); ++i) {
-        const double reach = r + s.segmentWidth(i) / 2;
-        const auto& a = s.points[i];
-        const auto& b = s.points[i + 1];
-        if (distSqToSegment(x, y, a.x, a.y, b.x, b.y) <= reach * reach) return true;
-    }
-    return false;
-}
 
 }  // namespace
 
 Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path, EditorOptions opts)
     : opts_(std::move(opts)),
       canvas_(screenWidth, screenHeight),
-      toolbar_(screenWidth, opts_.toolbarHeight),
+      toolbar_(screenWidth, opts_.toolbarHeight, editorToolbar(opts_.fromList)),
       pageArea_{0, opts_.toolbarHeight, screenWidth, screenHeight},
       doc_(std::move(doc)),
-      path_(std::move(path)) {
+      path_(std::move(path)),
+      eraseWhole_(opts_.eraseWholeStrokes) {
     if (doc_.pages.empty()) {
         // New notebook: one page exactly the size of the drawing area.
         doc_.pages.push_back(makeBlankPage(pageArea_.width() * 72.0 / opts_.dpi,
@@ -75,7 +77,15 @@ double Editor::pointWidth(const PenSample& s) const {
 // ---- drawing to the canvas ----
 
 ToolbarState Editor::toolbarState() const {
-    return {tool_, size_, !undo_.empty(), !redo_.empty(), modified_, page_, doc_.pages.size(), status_};
+    ToolbarState s;
+    static constexpr Action tools[] = {Action::Pen, Action::Highlighter, Action::Eraser};
+    static constexpr Action sizes[] = {Action::SizeFine, Action::SizeMedium, Action::SizeThick};
+    s.active = {tools[static_cast<int>(tool_)], sizes[static_cast<int>(size_)]};
+    if (undo_.empty()) s.disabled.push_back(Action::Undo);
+    if (redo_.empty()) s.disabled.push_back(Action::Redo);
+    s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"}, {Action::Eraser, eraseWhole_ ? "STROKE" : "ERASE"}};
+    s.text = !status_.empty() ? status_ : std::to_string(page_ + 1) + "/" + std::to_string(doc_.pages.size());
+    return s;
 }
 
 void Editor::redrawAll(Refresh mode) {
@@ -144,8 +154,9 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
 
     if (s.eraser || tool_ == ToolKind::Eraser) {
         gesture_ = Gesture::Erase;
-        pendingErase_ = UndoAction{UndoAction::Kind::Erase, page_, currentLayer(), {}, std::nullopt};
-        eraseAt(s);
+        pendingErase_ = UndoAction{UndoAction::Kind::Edit, page_, currentLayer(), {}, std::nullopt};
+        eraserLast_.reset();
+        eraseAt(s, now);
         return;
     }
 
@@ -168,7 +179,7 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
 void Editor::penMove(const PenSample& s, uint64_t now) {
     penActivity(now);
     if (gesture_ == Gesture::Erase) {
-        eraseAt(s);
+        eraseAt(s, now);
         return;
     }
     if (gesture_ != Gesture::Draw) return;
@@ -189,7 +200,7 @@ void Editor::penUp(uint64_t now) {
     penActivity(now);
     if (gesture_ == Gesture::Draw) {
         commitStroke(now);
-    } else if (gesture_ == Gesture::Erase && !pendingErase_.items.empty()) {
+    } else if (gesture_ == Gesture::Erase && !pendingErase_.edits.empty()) {
         pushUndo(std::move(pendingErase_));
         markModified(now);
     }
@@ -212,29 +223,67 @@ void Editor::commitStroke(uint64_t now) {
     const RectF bounds = live_.bounds();
     elements.emplace_back(std::move(live_));
     live_ = Stroke{};
-    pushUndo({UndoAction::Kind::AddStroke, page_, layer, {{elements.size() - 1, Stroke{}}}, std::nullopt});
+    pushUndo({UndoAction::Kind::Edit, page_, layer, {{true, elements.size() - 1, Stroke{}}}, std::nullopt});
     markModified(now);
     scheduleSettle(xf_.toScreen(bounds), now);
 }
 
-void Editor::eraseAt(const PenSample& s) {
-    const double x = xf_.toPageX(s.x), y = xf_.toPageY(s.y), r = eraserWidth() / 2;
+void Editor::eraseAt(const PenSample& s, uint64_t now) {
+    // The eraser sweeps from its previous position, so a fast swipe leaves no gaps.
+    const StrokePoint to{xf_.toPageX(s.x), xf_.toPageY(s.y)};
+    const StrokePoint from = eraserLast_.value_or(to);
+    eraserLast_ = to;
+    const double r = eraserWidth() / 2;
+
     auto& elements = currentPage().layers[pendingErase_.layer].elements;
-    IRect dirty;
+    RectF changed;
+    std::vector<Stroke> pieces;
     for (size_t i = 0; i < elements.size();) {
         const auto* st = std::get_if<Stroke>(&elements[i]);
-        if (st && strokeHit(*st, x, y, r)) {
-            dirty = dirty.united(xf_.toScreen(st->bounds()));
-            pendingErase_.items.emplace_back(i, std::move(elements[i]));
-            elements.erase(elements.begin() + static_cast<std::ptrdiff_t>(i));
+        if (!st || !eraseFromStroke(*st, from, to, r, pieces)) {
+            ++i;
+            continue;
+        }
+        RectF area;  // what changes on screen
+        if (eraseWhole_) {
+            area = st->bounds();
+            pieces.clear();
         } else {
+            // Only the swept area and the new end caps.
+            area.add(from.x, from.y);
+            area.add(to.x, to.y);
+            area.grow(r + st->maxWidth());
+        }
+        changed.add(area.x0, area.y0);
+        changed.add(area.x1, area.y1);
+
+        pendingErase_.edits.push_back({false, i, std::move(elements[i])});
+        elements.erase(elements.begin() + static_cast<std::ptrdiff_t>(i));
+        for (Stroke& piece : pieces) {
+            elements.insert(elements.begin() + static_cast<std::ptrdiff_t>(i), std::move(piece));
+            pendingErase_.edits.push_back({true, i, Stroke{}});
             ++i;
         }
     }
-    if (dirty.empty()) return;
-    // Not the fast DU: the page under erased ink isn't only white (rule lines are
-    // gray), and DU leaves pixels with gray targets showing the old black.
-    repaint(dirty, Refresh::Content);
+    if (changed.valid) previewErase(xf_.toScreen(changed), now);
+}
+
+void Editor::previewErase(const IRect& r, uint64_t now) {
+    const IRect area = r.intersected(pageArea_);
+    if (area.empty()) return;
+    canvas_.fill(area, kOffPageGray);
+    drawPage(canvas_, currentPage(), xf_, area, opts_.render);
+    // Shown right away with fast DU, which can only draw black and white, so the
+    // preview is strictly black and white: rule lines and highlights in the area
+    // vanish for a moment. (Sending their real gray with DU would leave the old
+    // black ink showing.) When the pen rests, the area is repainted for real and
+    // refreshed with GC16; those pixels really change then, so they get redrawn.
+    for (int y = area.y0; y < area.y1; ++y) {
+        uint8_t* row = canvas_.row(y);
+        for (int x = area.x0; x < area.x1; ++x) row[x] = row[x] < 128 ? 0 : 255;
+    }
+    damage_.push_back({area, Refresh::Ink});
+    scheduleSettle(area, now);
 }
 
 // ---- actions ----
@@ -243,7 +292,14 @@ void Editor::perform(Action a, uint64_t now) {
     switch (a) {
         case Action::Pen: tool_ = ToolKind::Pen; break;
         case Action::Highlighter: tool_ = ToolKind::Highlighter; break;
-        case Action::Eraser: tool_ = ToolKind::Eraser; break;
+        case Action::Eraser:
+            if (tool_ == ToolKind::Eraser) {
+                // Tapping the selected eraser switches between cutting strokes and removing them whole.
+                eraseWhole_ = !eraseWhole_;
+                setStatus(eraseWhole_ ? "WHOLE" : "PARTIAL", now);
+            }
+            tool_ = ToolKind::Eraser;
+            break;
         case Action::SizeFine: size_ = ToolSize::Fine; break;
         case Action::SizeMedium: size_ = ToolSize::Medium; break;
         case Action::SizeThick: size_ = ToolSize::Thick; break;
@@ -258,15 +314,24 @@ void Editor::perform(Action a, uint64_t now) {
             return;
         case Action::Save: save(now); return;
         case Action::Exit:
+        case Action::Quit:
             if (!modified_ || now < exitArmedUntil_ || save(now)) {
-                quit_ = true;
+                close_ = true;
+                quit_ = a == Action::Quit;
             } else {
-                // Save failed: a second EXIT within a few seconds leaves without saving.
+                // Save failed: a second tap within a few seconds leaves without saving.
                 exitArmedUntil_ = now + 4000;
                 setStatus("UNSAVED", now, 4000);
             }
             return;
-        case Action::None: return;
+        case Action::None:
+        case Action::NewNotebook:
+        case Action::Sort:
+        case Action::Rename:
+        case Action::Duplicate:
+        case Action::Delete:
+        case Action::Confirm:
+        case Action::Cancel: return;  // not editor actions
     }
     updateToolbar();
 }
@@ -359,19 +424,19 @@ RectF Editor::apply(UndoAction& a, bool forward) {
     }
 
     auto& els = doc_.pages[a.page].layers[a.layer].elements;
-    const bool removing = (a.kind == UndoAction::Kind::Erase) == forward;
-    if (removing) {
-        // Removals replay in their original order.
-        for (auto& [index, element] : a.items) {
-            element = take(els, index);
-            unite(element);
+    auto step = [&](ElementEdit& e, bool redo) {
+        if (e.insert == redo) {
+            unite(e.element);
+            put(els, e.index, std::move(e.element));
+        } else {
+            e.element = take(els, e.index);
+            unite(e.element);
         }
+    };
+    if (forward) {
+        for (auto& e : a.edits) step(e, true);
     } else {
-        // Re-insertions go in reverse order, restoring the exact original positions.
-        for (auto it = a.items.rbegin(); it != a.items.rend(); ++it) {
-            unite(it->second);
-            put(els, it->first, std::move(it->second));
-        }
+        for (auto it = a.edits.rbegin(); it != a.edits.rend(); ++it) step(*it, false);
     }
     return changed;
 }

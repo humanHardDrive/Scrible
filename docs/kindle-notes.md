@@ -48,17 +48,24 @@ Use the "Xournal-Scribe Input Test" library entry to re-check orientation; fix i
 - Pen ink is drawn without antialiasing on the device. A thin antialiased line is mostly
   gray pixels, which DU turns white while you write, and then the grayscale cleanup
   "fills it in". Users noticed exactly that change.
-- Waveforms used: **DU** for ink and toolbar (fast, black/white only); **GC16, partial**
-  for erasing, undo/redo and the cleanup after the pen rests; **GC16 + flash** for page
-  changes.
+- Waveforms used: **DU** for ink, the eraser preview and the toolbar (fast, black/white
+  only); **GC16, partial** for undo/redo and the cleanup after the pen rests; **GC16 +
+  flash** for page changes.
 - **DU can't draw gray.** A pixel whose new value is gray keeps showing its old value, and
   the controller records it as updated anyway. A later partial update (which only drives
   pixels whose value changed) won't fix it; only a flashing update does. Erasing with DU
-  left black marks wherever erased ink had crossed a rule line (seen on the device). So
-  anything that can reveal gray (erasing, undo) uses GC16, and the toolbar is strictly
-  black and white (disabled buttons are checkered, not gray). `EinkPanel` models these
-  rules for the tests and the desktop build. GC16 rather than GL16 because GL16 assumes
-  pixels start out white.
+  left black marks wherever erased ink had crossed a rule line (seen on the device).
+  Rules that follow from this:
+  - Only send DU strictly black/white content. The toolbar never uses gray (disabled
+    buttons are checkered).
+  - Erasing shows a black/white version of the erased area right away (rule lines and
+    highlights there turn white), then repaints the real content with GC16 once the pen
+    rests. Those pixels really change from white to gray then, so the controller redraws
+    them. This keeps the eraser as responsive as ink.
+  - Undo/redo goes straight to GC16. GC16 rather than GL16, because GL16 assumes pixels
+    start out white.
+
+  `EinkPanel` models these rules for the tests and the desktop build.
 - "Fast mode" (`fbink_mtk_toggle_auto_reagl(fd, false)`) stops the driver from silently
   upgrading large partial updates to REAGL; KOReader enables it on the Scribe.
 - "Pen mode" (`fbink_mtk_toggle_pen_mode`) is the low-latency inking mode. FBInk's docs:
@@ -117,6 +124,13 @@ any Kindle on firmware 5.16.3 or newer. It ships `arm-kindlehf-linux-gnueabihf` 
 with glibc 2.20 and Linux 4.1.52 headers. libstdc++ is linked statically because the
 firmware's copy is older. Prebuilt toolchains are x86_64 Linux only, hence the Docker build
 on macOS.
+
+Everything is compiled with `_FILE_OFFSET_BITS=64`. On 32-bit ARM, `stat()`/`readdir()`
+otherwise fail with EOVERFLOW on filesystems with large inode numbers, and the notebook list
+silently came up empty under QEMU.
+
+The ARM tests can run under QEMU with Debian's `libc6-armhf-cross` (`qemu-arm -L
+/usr/arm-linux-gnueabihf …`). The toolchain sysroot's own `ld.so` can't execute.
 
 ## Xournal++ file format (as implemented)
 
