@@ -15,6 +15,7 @@
 #include "Editor.h"
 #include "EinkPanel.h"
 #include "Eraser.h"
+#include "Shapes.h"
 #include "Renderer.h"
 #include "XoppFile.h"
 
@@ -369,7 +370,7 @@ TEST(draws_ruled_background) {
 }
 
 TEST(toolbar_layout_fits) {
-    for (int width : {600, 1236, 1860}) {
+    for (int width : {1072, 1236, 1860, 1986}) {  // Kindle screen widths
         const Editor e(width, 1200, Document{}, tempPath("toolbar-fit.xopp"));
         const Toolbar& tb = e.toolbar();
         int lastRight = 0;
@@ -1215,6 +1216,209 @@ TEST(library_menu_button_shows_it_was_pressed) {
         CHECK(app.canvas().at(m.x0 + 10, m.y0 + 10) == 255);
     }
     removeDir(dir);
+}
+
+// ---- shape recognition ----
+
+namespace {
+
+// Deterministic "hand" noise in [-1, 1).
+struct Wobble {
+    uint32_t state;
+    double next() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<double>(state >> 8) / (1 << 23) - 1;
+    }
+};
+
+// A path traced point by point every `step`, each point off by up to `jitter`.
+std::vector<StrokePoint> handDrawn(const std::vector<StrokePoint>& path, double step, double jitter, uint32_t seed) {
+    Wobble w{seed};
+    std::vector<StrokePoint> out;
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        const StrokePoint a = path[i], b = path[i + 1];
+        const int n = std::max(1, static_cast<int>(std::hypot(b.x - a.x, b.y - a.y) / step));
+        for (int k = 0; k < n; ++k) {
+            const double t = static_cast<double>(k) / n;
+            out.push_back({a.x + (b.x - a.x) * t + w.next() * jitter, a.y + (b.y - a.y) * t + w.next() * jitter});
+        }
+    }
+    out.push_back(path.back());
+    return out;
+}
+
+std::vector<StrokePoint> ellipsePath(double cx, double cy, double a, double b, double rot, double from, double sweep,
+                                     int n) {
+    std::vector<StrokePoint> out;
+    for (int k = 0; k <= n; ++k) {
+        const double t = from + sweep * k / n;
+        const double x = a * std::cos(t), y = b * std::sin(t);
+        out.push_back({cx + x * std::cos(rot) - y * std::sin(rot), cy + x * std::sin(rot) + y * std::cos(rot)});
+    }
+    return out;
+}
+
+bool near(StrokePoint a, StrokePoint b, double tol) { return std::hypot(a.x - b.x, a.y - b.y) <= tol; }
+
+bool hasCorner(const Shape& s, StrokePoint c, double tol) {
+    for (const StrokePoint& p : s.points)
+        if (near(p, c, tol)) return true;
+    return false;
+}
+
+double cosAt(StrokePoint a, StrokePoint b, StrokePoint c) {
+    const double ux = a.x - b.x, uy = a.y - b.y, vx = c.x - b.x, vy = c.y - b.y;
+    return (ux * vx + uy * vy) / (std::hypot(ux, uy) * std::hypot(vx, vy));
+}
+
+}  // namespace
+
+TEST(recognizes_lines) {
+    Shape s = recognizeStroke(handDrawn({{10, 20}, {210, 80}}, 2, 1.0, 1));
+    CHECK(s.kind == ShapeKind::Line);
+    if (s.kind == ShapeKind::Line) CHECK(near(s.points[0], {10, 20}, 3) && near(s.points[1], {210, 80}, 3));
+
+    s = recognizeStroke(handDrawn({{30, 20}, {140, 24}}, 2, 1.2, 15));  // very jittery
+    CHECK(s.kind == ShapeKind::Line);
+    s = recognizeStroke(handDrawn({{10, 50}, {200, 58}}, 2, 0.8, 2));  // 2.4 degrees off horizontal
+    CHECK(s.kind == ShapeKind::Line && s.points[0].y == s.points[1].y);
+    s = recognizeStroke(handDrawn({{40, 10}, {44, 150}}, 2, 0.8, 3));  // 1.6 degrees off vertical
+    CHECK(s.kind == ShapeKind::Line && s.points[0].x == s.points[1].x);
+
+    // Not lines: an arc, a V, a squiggle, a tiny mark.
+    CHECK(recognizeStroke(ellipsePath(100, 100, 60, 60, 0, 0, 3.14, 40)).kind == ShapeKind::None);
+    CHECK(recognizeStroke(handDrawn({{0, 0}, {50, 100}, {100, 0}}, 2, 0.5, 4)).kind == ShapeKind::None);
+    std::vector<StrokePoint> squiggle;
+    for (int x = 0; x <= 200; x += 2) squiggle.push_back({double(x), 50 + 15 * std::sin(x * 0.08)});
+    CHECK(recognizeStroke(squiggle).kind == ShapeKind::None);
+    CHECK(recognizeStroke(handDrawn({{0, 0}, {4, 3}}, 0.5, 0.2, 5)).kind == ShapeKind::None);
+}
+
+TEST(recognizes_closed_shapes) {
+    // A rectangle started mid-side, overshooting the start a little at the end.
+    Shape s = recognizeStroke(handDrawn({{60, 20}, {150, 20}, {150, 90}, {20, 90}, {20, 20}, {75, 22}}, 2, 1.0, 6));
+    CHECK(s.kind == ShapeKind::Rectangle);
+    if (s.kind == ShapeKind::Rectangle) {
+        CHECK(s.points.size() == 5);
+        for (StrokePoint c : {StrokePoint{20, 20}, StrokePoint{150, 20}, StrokePoint{150, 90}, StrokePoint{20, 90}})
+            CHECK(hasCorner(s, c, 4));
+        CHECK(s.points[0].y == s.points[1].y || s.points[0].x == s.points[1].x);  // exactly axis-aligned
+    }
+
+    // Overshooting the starting corner by a lot is still closed.
+    s = recognizeStroke(handDrawn({{200, 30}, {290, 28}, {292, 100}, {198, 98}, {200, 30}, {230, 31}}, 2, 1.5, 16));
+    CHECK(s.kind == ShapeKind::Rectangle);
+
+    // Rotated 30 degrees: still a rectangle, with exact right angles.
+    std::vector<StrokePoint> rotated;
+    const double c30 = std::cos(0.5236), s30 = std::sin(0.5236);
+    for (StrokePoint p : {StrokePoint{0, 0}, StrokePoint{120, 0}, StrokePoint{120, 60}, StrokePoint{0, 60},
+                          StrokePoint{0, 0}})
+        rotated.push_back({100 + p.x * c30 - p.y * s30, 100 + p.x * s30 + p.y * c30});
+    s = recognizeStroke(handDrawn(rotated, 2, 0.8, 7));
+    CHECK(s.kind == ShapeKind::Rectangle);
+    if (s.points.size() == 5) {
+        for (int k = 0; k < 4; ++k) CHECK(std::fabs(cosAt(s.points[(k + 3) % 4], s.points[k], s.points[k + 1])) < 1e-9);
+    }
+
+    s = recognizeStroke(handDrawn({{50, 10}, {100, 100}, {0, 100}, {50, 10}}, 2, 0.8, 8));
+    CHECK(s.kind == ShapeKind::Triangle && s.points.size() == 4);
+    CHECK(hasCorner(s, {50, 10}, 5) && hasCorner(s, {100, 100}, 5) && hasCorner(s, {0, 100}, 5));
+
+    s = recognizeStroke(handDrawn({{30, 10}, {90, 10}, {120, 80}, {0, 80}, {30, 10}}, 2, 0.8, 9));  // trapezoid
+    CHECK(s.kind == ShapeKind::Quadrilateral);
+
+    // A circle, wobbly, overshooting its start.
+    std::vector<StrokePoint> circle = ellipsePath(100, 100, 50, 50, 0, 0.3, 2 * 3.14159 + 0.4, 120);
+    Wobble w{10};
+    for (StrokePoint& p : circle) p = {p.x + w.next() * 1.2, p.y + w.next() * 1.2};
+    s = recognizeStroke(circle);
+    CHECK(s.kind == ShapeKind::Circle);
+    for (const StrokePoint& p : s.points) CHECK(std::fabs(std::hypot(p.x - 100, p.y - 100) - 50) < 3);
+
+    CHECK(recognizeStroke(ellipsePath(100, 100, 80, 35, 0, 0, 2 * 3.14159, 120)).kind == ShapeKind::Ellipse);
+    // Going around twice is a scribble, not a circle.
+    CHECK(recognizeStroke(ellipsePath(100, 100, 50, 50, 0, 0, 4 * 3.14159, 240)).kind == ShapeKind::None);
+}
+
+TEST(polygons_from_separate_lines_and_arrows) {
+    std::vector<StrokePoint> chain;
+    Shape closed;
+    CHECK(extendChain(chain, {0, 0}, {100, 0}, closed) && closed.kind == ShapeKind::None);
+    CHECK(extendChain(chain, {101, 1}, {100, 60}, closed) && closed.kind == ShapeKind::None);
+    CHECK(extendChain(chain, {1, 60}, {99, 61}, closed) && closed.kind == ShapeKind::None);  // drawn the other way
+    CHECK(extendChain(chain, {0, 59}, {1, 2}, closed) && closed.kind == ShapeKind::Rectangle);
+    chain = {{0, 0}, {100, 0}};
+    CHECK(!extendChain(chain, {300, 300}, {400, 300}, closed));  // doesn't touch
+
+    Shape arrow;
+    CHECK(makeArrow({0, 0}, {100, 0}, handDrawn({{88, -9}, {100, 0}, {88, 9}}, 1, 0.3, 11), arrow));
+    CHECK(arrow.kind == ShapeKind::Arrow && arrow.points.size() == 5);
+    if (arrow.points.size() == 5) {
+        CHECK(near(arrow.points[0], {0, 0}, 1e-9) && near(arrow.points[1], {100, 0}, 1e-9));
+        CHECK(std::fabs(arrow.points[2].y + arrow.points[4].y) < 1e-9);  // symmetric head
+    }
+    CHECK(makeArrow({0, 0}, {100, 0}, handDrawn({{12, -9}, {0, 0}, {12, 9}}, 1, 0.3, 12), arrow));  // other end
+    CHECK(near(arrow.points[1], {0, 0}, 1e-9));
+    CHECK(!makeArrow({0, 0}, {100, 0}, handDrawn({{38, -9}, {50, 0}, {38, 9}}, 1, 0.3, 13), arrow));    // mid-line
+    CHECK(!makeArrow({0, 0}, {100, 0}, handDrawn({{112, -9}, {100, 0}, {112, 9}}, 1, 0.3, 14), arrow));  // backwards
+}
+
+TEST(editor_shape_mode) {
+    auto draw = [](Editor& e, const std::vector<StrokePoint>& pts, uint64_t& t) {
+        e.penDown({pts[0].x, pts[0].y, 0.5, false}, t += 10);
+        for (size_t i = 1; i < pts.size(); ++i) e.penMove({pts[i].x, pts[i].y, 0.5, false}, t += 3);
+        e.penUp(t += 3);
+    };
+    uint64_t t = 0;
+    {
+        Editor e(900, 1200, Document{}, tempPath("shapes.xopp"));
+        const auto& els = e.document().pages[0].layers.back().elements;
+        e.perform(Action::Pen, t += 10);  // the pen is already selected: tapping it again turns shapes on
+        CHECK(e.recognizeShapes());
+
+        draw(e, ellipsePath(450, 600, 150, 150, 0, 0.2, 2 * 3.14159 + 0.3, 150), t);
+        CHECK(els.size() == 1);
+        const size_t clean = std::get<Stroke>(els.at(0)).points.size();
+        e.perform(Action::Undo, t += 10);  // first undo: back to what was drawn
+        CHECK(els.size() == 1 && std::get<Stroke>(els[0]).points.size() != clean);
+        e.perform(Action::Undo, t += 10);  // second: gone
+        CHECK(els.empty());
+        e.perform(Action::Redo, t += 10);
+        e.perform(Action::Redo, t += 10);
+        CHECK(els.size() == 1 && std::get<Stroke>(els[0]).points.size() == clean);
+
+        // Writing still works in shape mode: an unrecognizable stroke stays as drawn.
+        std::vector<StrokePoint> squiggle;
+        for (int x = 100; x <= 500; x += 4) squiggle.push_back({double(x), 1000 + 40 * std::sin(x * 0.05)});
+        draw(e, squiggle, t);
+        CHECK(els.size() == 2 && std::get<Stroke>(els[1]).points.size() > 50);
+    }
+    {
+        // Four separate sides become one rectangle; a line plus a V becomes an arrow.
+        EditorOptions o;
+        o.recognizeShapes = true;
+        Editor e(900, 1200, Document{}, tempPath("polygon.xopp"), o);
+        const auto& els = e.document().pages[0].layers.back().elements;
+        draw(e, handDrawn({{200, 300}, {600, 300}}, 4, 1, 21), t);
+        draw(e, handDrawn({{602, 302}, {600, 600}}, 4, 1, 22), t);
+        draw(e, handDrawn({{598, 601}, {201, 600}}, 4, 1, 23), t);
+        CHECK(els.size() == 3);
+        draw(e, handDrawn({{199, 598}, {201, 303}}, 4, 1, 24), t);
+        CHECK(els.size() == 1 && std::get<Stroke>(els[0]).points.size() == 5);
+        e.perform(Action::Undo, t += 10);
+        CHECK(els.size() == 4);  // the four sides again
+
+        draw(e, handDrawn({{200, 900}, {600, 900}}, 4, 1, 25), t);
+        draw(e, handDrawn({{560, 870}, {600, 900}, {560, 930}}, 3, 0.8, 26), t);
+        CHECK(els.size() == 5 && std::get<Stroke>(els.back()).points.size() == 5);
+    }
+    {
+        // Shape mode off: nothing changes.
+        Editor e(900, 1200, Document{}, tempPath("noshapes.xopp"));
+        draw(e, ellipsePath(450, 600, 150, 150, 0, 0, 2 * 3.14159, 150), t);
+        CHECK(std::get<Stroke>(e.document().pages[0].layers.back().elements.at(0)).points.size() > 100);
+    }
 }
 
 int main() {

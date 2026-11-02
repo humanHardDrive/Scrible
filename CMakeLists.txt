@@ -49,6 +49,7 @@ add_library(xscribe_core STATIC
   src/core/Png.cpp
   src/core/Renderer.cpp
   src/core/Settings.cpp
+  src/core/Shapes.cpp
   src/core/TextPrompt.cpp
   src/core/Toolbar.cpp
   src/core/XoppFile.cpp)

@@ -49,6 +49,7 @@ struct EditorOptions {
     // EXIT (leave the app); otherwise just EXIT.
     bool fromList = false;
     bool eraseWholeStrokes = false;  // eraser mode to start in
+    bool recognizeShapes = false;    // pen mode to start in (SHAPE rather than PEN)
     int toolbarHeight = 120;
     double dpi = 300;  // sizes new notebooks so a page fills the screen
     std::string pageStyle = "lined";
@@ -68,6 +69,7 @@ public:
     ToolKind tool() const { return tool_; }
     bool modified() const { return modified_; }
     bool eraseWholeStrokes() const { return eraseWhole_; }
+    bool recognizeShapes() const { return shapes_; }
     // BACK or EXIT was tapped and the notebook is saved (or the user chose to leave
     // it unsaved). quitRequested() tells EXIT (leave the app) from BACK.
     bool closeRequested() const { return close_; }
@@ -121,6 +123,7 @@ private:
     void eraseAt(const PenSample& s, uint64_t now);
     void previewErase(const IRect& r, uint64_t now);
     void commitStroke(uint64_t now);
+    void recognize(size_t layer);
     void pushUndo(UndoAction a);
     void undo(uint64_t now);
     void redo(uint64_t now);
@@ -147,6 +150,17 @@ private:
     ToolKind tool_ = ToolKind::Pen;
     ToolSize size_ = ToolSize::Medium;
     bool eraseWhole_ = false;  // eraser removes whole strokes instead of cutting them
+    bool shapes_ = false;      // pen strokes are recognized as shapes
+    // Lines recognized one after another, which may still close into a polygon or
+    // get an arrowhead. They are the last `lines` elements of the layer.
+    struct ShapeChain {
+        bool valid = false;
+        size_t page = 0, layer = 0;
+        size_t last = 0;  // element index of the newest line
+        size_t lines = 0;
+        std::vector<StrokePoint> points;
+    };
+    ShapeChain chain_;
     Gesture gesture_ = Gesture::None;
     Stroke live_;
     std::vector<double> livePointWidths_;

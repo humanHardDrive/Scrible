@@ -3,6 +3,7 @@
 #include <cstdio>
 
 #include "Eraser.h"
+#include "Shapes.h"
 #include "XoppFile.h"
 
 namespace xs {
@@ -19,8 +20,9 @@ constexpr double kEraserWidths[] = {2.83, 8.50, 19.84};
 
 ToolbarGroups editorToolbar(bool fromList) {
     ToolbarGroups g = {
-        // "STROKE" is the eraser's label in whole-stroke mode; the button is sized for it.
-        {{Action::Pen, "PEN"}, {Action::Highlighter, "MARK"}, {Action::Eraser, "STROKE"}},
+        // Buttons are sized for their longer label: the pen is "SHAPE" while recognizing
+        // shapes, the eraser "STROKE" while removing whole strokes.
+        {{Action::Pen, "SHAPE"}, {Action::Highlighter, "MARK"}, {Action::Eraser, "STROKE"}},
         {{Action::SizeFine, "S"}, {Action::SizeMedium, "M"}, {Action::SizeThick, "L"}},
         {{Action::Undo, "UNDO"}, {Action::Redo, "REDO"}},
         {{Action::PrevPage, "<"}, {Action::None, "000/000"}, {Action::NextPage, ">"}},
@@ -43,7 +45,8 @@ Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path
       pageArea_{0, opts_.toolbarHeight, screenWidth, screenHeight},
       doc_(std::move(doc)),
       path_(std::move(path)),
-      eraseWhole_(opts_.eraseWholeStrokes) {
+      eraseWhole_(opts_.eraseWholeStrokes),
+      shapes_(opts_.recognizeShapes) {
     if (doc_.pages.empty()) {
         // New notebook: one page exactly the size of the drawing area.
         doc_.pages.push_back(makeBlankPage(pageArea_.width() * 72.0 / opts_.dpi,
@@ -83,7 +86,9 @@ ToolbarState Editor::toolbarState() const {
     s.active = {tools[static_cast<int>(tool_)], sizes[static_cast<int>(size_)]};
     if (undo_.empty()) s.disabled.push_back(Action::Undo);
     if (redo_.empty()) s.disabled.push_back(Action::Redo);
-    s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"}, {Action::Eraser, eraseWhole_ ? "STROKE" : "ERASE"}};
+    s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"},
+                {Action::Pen, shapes_ ? "SHAPE" : "PEN"},
+                {Action::Eraser, eraseWhole_ ? "STROKE" : "ERASE"}};
     s.text = !status_.empty() ? status_ : std::to_string(page_ + 1) + "/" + std::to_string(doc_.pages.size());
     return s;
 }
@@ -156,6 +161,7 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         gesture_ = Gesture::Erase;
         pendingErase_ = UndoAction{UndoAction::Kind::Edit, page_, currentLayer(), {}, std::nullopt};
         eraserLast_.reset();
+        chain_.valid = false;
         eraseAt(s, now);
         return;
     }
@@ -221,11 +227,83 @@ void Editor::commitStroke(uint64_t now) {
     const size_t layer = currentLayer();
     auto& elements = currentPage().layers[layer].elements;
     const RectF bounds = live_.bounds();
+    const bool pen = live_.tool == StrokeTool::Pen;
     elements.emplace_back(std::move(live_));
     live_ = Stroke{};
     pushUndo({UndoAction::Kind::Edit, page_, layer, {{true, elements.size() - 1, Stroke{}}}, std::nullopt});
     markModified(now);
     scheduleSettle(xf_.toScreen(bounds), now);
+    if (shapes_ && pen) recognize(layer);
+    else chain_.valid = false;
+}
+
+// Replaces the stroke just drawn (and, for polygons and arrows, the lines drawn
+// right before it) with the clean shape. It's a separate undo step, so the first
+// undo brings back what was drawn by hand.
+void Editor::recognize(size_t layer) {
+    auto& els = currentPage().layers[layer].elements;
+    const size_t last = els.size() - 1;
+    const Stroke drawn = std::get<Stroke>(els[last]);
+    const bool continuing = chain_.valid && chain_.page == page_ && chain_.layer == layer && chain_.last + 1 == last;
+
+    Shape shape = recognizeStroke(drawn.points);
+    size_t replaced = 1;
+    if (shape.kind == ShapeKind::Line) {
+        ShapeChain chain = continuing ? chain_ : ShapeChain{true, page_, layer, last, 0, {}};
+        Shape closed;
+        if (!extendChain(chain.points, shape.points[0], shape.points[1], closed)) {
+            chain.points.clear();  // doesn't connect: this line starts a new chain
+            chain.lines = 0;
+            extendChain(chain.points, shape.points[0], shape.points[1], closed);
+        }
+        chain.lines++;
+        chain.last = last;
+        if (closed.kind != ShapeKind::None) {
+            shape = closed;
+            replaced = chain.lines;
+            chain.valid = false;
+        }
+        chain_ = chain;
+    } else {
+        Shape arrow;
+        if (shape.kind == ShapeKind::None && continuing && chain_.lines == 1 &&
+            makeArrow(chain_.points.front(), chain_.points.back(), drawn.points, arrow)) {
+            shape = arrow;
+            replaced = 2;
+        }
+        chain_.valid = false;
+    }
+    if (shape.kind == ShapeKind::None) return;
+
+    // The hand-drawn widths vary with pressure; the clean shape gets their average.
+    double widthSum = 0, segments = 0;
+    for (size_t k = els.size() - replaced; k < els.size(); ++k) {
+        const Stroke& s = std::get<Stroke>(els[k]);
+        for (size_t i = 0; i + 1 < s.points.size(); ++i, ++segments) widthSum += s.segmentWidth(i);
+    }
+    Stroke clean = drawn;
+    clean.points = shape.points;
+    clean.segmentWidths.clear();
+    if (segments > 0) clean.width = widthSum / segments;
+    clean.invalidateBounds();
+
+    UndoAction a{UndoAction::Kind::Edit, page_, layer, {}, std::nullopt};
+    RectF changed;
+    auto unite = [&](const RectF& b) {
+        changed.add(b.x0, b.y0);
+        changed.add(b.x1, b.y1);
+    };
+    for (size_t k = 0; k < replaced; ++k) {
+        unite(elementBounds(els.back()));
+        a.edits.push_back({false, els.size() - 1, std::move(els.back())});
+        els.pop_back();
+    }
+    unite(clean.bounds());
+    els.push_back(std::move(clean));
+    a.edits.push_back({true, els.size() - 1, Stroke{}});
+    pushUndo(std::move(a));
+    // Ink disappears over gray rule lines, so not DU (see Refresh).
+    repaint(xf_.toScreen(changed), Refresh::Content);
 }
 
 void Editor::eraseAt(const PenSample& s, uint64_t now) {
@@ -290,7 +368,14 @@ void Editor::previewErase(const IRect& r, uint64_t now) {
 
 void Editor::perform(Action a, uint64_t now) {
     switch (a) {
-        case Action::Pen: tool_ = ToolKind::Pen; break;
+        case Action::Pen:
+            if (tool_ == ToolKind::Pen) {
+                // Tapping the selected pen switches shape recognition on and off.
+                shapes_ = !shapes_;
+                setStatus(shapes_ ? "SHAPES" : "FREE", now);
+            }
+            tool_ = ToolKind::Pen;
+            break;
         case Action::Highlighter: tool_ = ToolKind::Highlighter; break;
         case Action::Eraser:
             if (tool_ == ToolKind::Eraser) {
@@ -338,6 +423,7 @@ void Editor::perform(Action a, uint64_t now) {
 
 void Editor::setPage(size_t index) {
     page_ = index;
+    chain_.valid = false;
     xf_ = fitPage(currentPage(), pageArea_);
     settle_ = {};
     settleAt_ = 0;
@@ -443,6 +529,7 @@ RectF Editor::apply(UndoAction& a, bool forward) {
 
 void Editor::undo(uint64_t now) {
     if (undo_.empty() || gesture_ == Gesture::Draw || gesture_ == Gesture::Erase) return;
+    chain_.valid = false;
     UndoAction a = std::move(undo_.back());
     undo_.pop_back();
     const RectF changed = apply(a, false);
@@ -453,6 +540,7 @@ void Editor::undo(uint64_t now) {
 
 void Editor::redo(uint64_t now) {
     if (redo_.empty() || gesture_ == Gesture::Draw || gesture_ == Gesture::Erase) return;
+    chain_.valid = false;
     UndoAction a = std::move(redo_.back());
     redo_.pop_back();
     const RectF changed = apply(a, true);

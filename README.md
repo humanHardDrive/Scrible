@@ -14,6 +14,9 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
+- Shape recognition, as in Xournal: lines, triangles, quadrilaterals, rectangles,
+  circles and ellipses, plus polygons drawn as separate sides and arrows (a line, then
+  a "V" at its end)
 - Pen with pressure, highlighter, and an eraser (also the pen's eraser end) that either
   cuts away just the ink it passes over, like Xournal++'s standard eraser, or removes
   whole strokes
@@ -104,9 +107,16 @@ In a notebook the toolbar is along the top: PEN / MARK / ERASE, sizes S / M / L,
 UNDO / REDO, `<` page `>`, SAVE, BACK, EXIT. Fingers only operate the toolbar, so your
 palm can rest on the page.
 
+- Tap PEN again to switch shape recognition on (SHAPE) or off (PEN). With it on,
+  strokes that look like a line, triangle, rectangle, circle and so on are replaced by
+  a clean version. Nearly horizontal or vertical lines are straightened, and right-angled
+  four-sided shapes become exact rectangles. Separate lines that close up become one
+  polygon, and a line followed by a "V" at one end becomes an arrow. Anything else
+  (handwriting, mostly) stays as drawn. If a shape was guessed wrong, one UNDO brings
+  back what you drew.
 - Tap ERASE again to switch between cutting away just what you erase (ERASE) and
-  removing whole strokes (STROKE). The pen's eraser end follows the same setting, and
-  the choice is remembered.
+  removing whole strokes (STROKE). The pen's eraser end follows the same setting.
+- Both choices are remembered.
 - BACK saves and returns to the list; EXIT saves and leaves the app.
 
 ### Troubleshooting

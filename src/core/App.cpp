@@ -36,6 +36,7 @@ bool App::openNotebook(const std::string& path, std::string& error) {
     EditorOptions eo = opts_.editor;
     eo.fromList = library_ != nullptr;
     if (settings_) eo.eraseWholeStrokes = settings_->get("eraser") == "stroke";
+    if (settings_) eo.recognizeShapes = settings_->get("shapes") == "on";
     editor_ = std::make_unique<Editor>(width_, height_, std::move(doc), path, eo);
     return true;
 }
@@ -69,6 +70,7 @@ void App::handle(const Library::Intent& intent, uint64_t now) {
 void App::afterEditorInput() {
     if (!editor_) return;
     if (settings_) settings_->set("eraser", editor_->eraseWholeStrokes() ? "stroke" : "partial");
+    if (settings_) settings_->set("shapes", editor_->recognizeShapes() ? "on" : "off");
     if (!editor_->closeRequested()) return;
     const bool quit = editor_->quitRequested() || !library_;
     editor_.reset();  // it has saved already
