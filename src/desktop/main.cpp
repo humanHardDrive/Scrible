@@ -1,0 +1,224 @@
+// Desktop front end (SDL3) for developing without a Kindle. It runs the same
+// Editor at the Scribe's resolution in a scaled-down window, and by default
+// imitates the e-ink panel (see EinkPanel): hard-edged ink, and refresh
+// artifacts such as DU leaving gray pixels unchanged show up as on the device.
+//
+//   xscribe-desktop [notebook.xopp] [--size 1860x2480] [--no-eink-sim]
+//
+// Mouse: left = pen, right = eraser. A drawing tablet gets real pressure.
+// Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, Cmd/Ctrl+S save,
+//       P/H/E pen/highlighter/eraser, 1/2/3 sizes, Left/Right pages, Esc quit.
+
+#include <SDL3/SDL.h>
+
+#include <cstdio>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "Editor.h"
+#include "EinkPanel.h"
+#include "XoppFile.h"
+
+namespace {
+
+struct Args {
+    std::string path = "notebook.xopp";
+    int width = 1860, height = 2480;  // Kindle Scribe (1st/2nd gen)
+    bool einkSim = true;
+};
+
+bool parseArgs(int argc, char** argv, Args& a) {
+    for (int i = 1; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--size") && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%dx%d", &a.width, &a.height) != 2) return false;
+        } else if (!std::strcmp(argv[i], "--no-eink-sim")) {
+            a.einkSim = false;
+        } else if (argv[i][0] == '-') {
+            return false;
+        } else {
+            a.path = argv[i];
+        }
+    }
+    return a.width > 0 && a.height > 0;
+}
+
+class Window {
+public:
+    bool open(int w, int h, bool einkSim) {
+        if (einkSim) panel_ = std::make_unique<xs::EinkPanel>(w, h);
+        SDL_SetHint(SDL_HINT_PEN_MOUSE_EVENTS, "0");  // tablet input arrives as pen events only
+        SDL_SetHint(SDL_HINT_PEN_TOUCH_EVENTS, "0");
+        if (!SDL_Init(SDL_INIT_VIDEO)) return fail("SDL_Init");
+
+        // Fit the portrait page on screen.
+        float scale = 0.35f;
+        if (const SDL_DisplayMode* m = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay()))
+            scale = std::min(0.9f * m->h / h, 0.9f * m->w / w);
+        if (!SDL_CreateWindowAndRenderer("Xournal-Scribe", static_cast<int>(w * scale), static_cast<int>(h * scale),
+                                         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY, &window_, &renderer_))
+            return fail("SDL_CreateWindowAndRenderer");
+        SDL_SetRenderLogicalPresentation(renderer_, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+        if (!texture_) return fail("SDL_CreateTexture");
+        SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_LINEAR);
+        return true;
+    }
+
+    ~Window() {
+        if (texture_) SDL_DestroyTexture(texture_);
+        if (renderer_) SDL_DestroyRenderer(renderer_);
+        if (window_) SDL_DestroyWindow(window_);
+        SDL_Quit();
+    }
+
+    void present(const xs::Canvas& c, const std::vector<xs::Damage>& damage) {
+        for (const xs::Damage& d : damage) {
+            const xs::IRect r = d.rect.intersected(c.rect());
+            if (r.empty()) continue;
+            if (panel_) panel_->refresh(c, d);
+            const xs::Canvas& shown = panel_ ? panel_->shown() : c;
+            const SDL_Rect sr{r.x0, r.y0, r.width(), r.height()};
+            void* pixels = nullptr;
+            int pitch = 0;
+            if (!SDL_LockTexture(texture_, &sr, &pixels, &pitch)) continue;
+            for (int y = 0; y < r.height(); ++y) {
+                const uint8_t* src = shown.row(r.y0 + y) + r.x0;
+                auto* dst = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(pixels) + static_cast<size_t>(y) * pitch);
+                for (int x = 0; x < r.width(); ++x) {
+                    const uint32_t g = src[x];
+                    dst[x] = 0xff000000u | g << 16 | g << 8 | g;
+                }
+            }
+            SDL_UnlockTexture(texture_);
+        }
+        SDL_SetRenderDrawColor(renderer_, 40, 40, 40, 255);
+        SDL_RenderClear(renderer_);
+        SDL_RenderTexture(renderer_, texture_, nullptr, nullptr);
+        SDL_RenderPresent(renderer_);
+    }
+
+    // Window coordinates -> canvas pixels.
+    void toCanvas(float wx, float wy, double& x, double& y) const {
+        float cx = wx, cy = wy;
+        SDL_RenderCoordinatesFromWindow(renderer_, wx, wy, &cx, &cy);
+        x = cx;
+        y = cy;
+    }
+
+private:
+    bool fail(const char* what) {
+        std::fprintf(stderr, "%s failed: %s\n", what, SDL_GetError());
+        return false;
+    }
+
+    std::unique_ptr<xs::EinkPanel> panel_;  // null with --no-eink-sim
+    SDL_Window* window_ = nullptr;
+    SDL_Renderer* renderer_ = nullptr;
+    SDL_Texture* texture_ = nullptr;
+};
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    Args args;
+    if (!parseArgs(argc, argv, args)) {
+        std::fprintf(stderr, "usage: %s [notebook.xopp] [--size WxH] [--no-eink-sim]\n", argv[0]);
+        return 2;
+    }
+
+    xs::Document doc;
+    if (FILE* f = std::fopen(args.path.c_str(), "rb")) {
+        std::fclose(f);
+        std::string error;
+        std::vector<std::string> warnings;
+        if (!xs::loadXopp(args.path, doc, error, &warnings)) {
+            std::fprintf(stderr, "%s: %s\n", args.path.c_str(), error.c_str());
+            return 1;
+        }
+        for (const auto& w : warnings) std::fprintf(stderr, "%s: warning: %s\n", args.path.c_str(), w.c_str());
+    }
+
+    Window win;
+    if (!win.open(args.width, args.height, args.einkSim)) return 1;
+    xs::EditorOptions eopts;
+    eopts.render.antialias = !args.einkSim;  // like the Kindle: hard-edged ink
+    xs::Editor editor(args.width, args.height, std::move(doc), args.path, eopts);
+    win.present(editor.canvas(), editor.takeDamage());
+
+    bool mouseDrawing = false;
+    float penPressure = 0.5f;
+    while (!editor.quitRequested()) {
+        const int wait = editor.msUntilIdleWork(SDL_GetTicks());
+        SDL_Event ev;
+        bool got = wait < 0 ? SDL_WaitEvent(&ev) : SDL_WaitEventTimeout(&ev, wait);
+        while (got) {
+            const uint64_t now = SDL_GetTicks();
+            double x = 0, y = 0;
+            switch (ev.type) {
+                case SDL_EVENT_QUIT: editor.perform(xs::Action::Exit, now); break;
+
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                    if (ev.button.button != SDL_BUTTON_LEFT && ev.button.button != SDL_BUTTON_RIGHT) break;
+                    win.toCanvas(ev.button.x, ev.button.y, x, y);
+                    editor.penDown({x, y, 0.5, ev.button.button == SDL_BUTTON_RIGHT}, now);
+                    mouseDrawing = true;
+                    break;
+                case SDL_EVENT_MOUSE_MOTION:
+                    if (!mouseDrawing) break;
+                    win.toCanvas(ev.motion.x, ev.motion.y, x, y);
+                    editor.penMove({x, y, 0.5, false}, now);
+                    break;
+                case SDL_EVENT_MOUSE_BUTTON_UP:
+                    if (!mouseDrawing) break;
+                    editor.penUp(now);
+                    mouseDrawing = false;
+                    break;
+
+                case SDL_EVENT_PEN_AXIS:
+                    if (ev.paxis.axis == SDL_PEN_AXIS_PRESSURE) penPressure = ev.paxis.value;
+                    break;
+                case SDL_EVENT_PEN_DOWN:
+                    win.toCanvas(ev.ptouch.x, ev.ptouch.y, x, y);
+                    editor.penDown({x, y, penPressure, ev.ptouch.eraser}, now);
+                    break;
+                case SDL_EVENT_PEN_MOTION:
+                    if (!(ev.pmotion.pen_state & SDL_PEN_INPUT_DOWN)) break;
+                    win.toCanvas(ev.pmotion.x, ev.pmotion.y, x, y);
+                    editor.penMove({x, y, penPressure, (ev.pmotion.pen_state & SDL_PEN_INPUT_ERASER_TIP) != 0}, now);
+                    break;
+                case SDL_EVENT_PEN_UP: editor.penUp(now); break;
+
+                case SDL_EVENT_KEY_DOWN: {
+                    const bool cmd = ev.key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL);
+                    const bool shift = ev.key.mod & SDL_KMOD_SHIFT;
+                    xs::Action a = xs::Action::None;
+                    switch (ev.key.key) {
+                        case SDLK_Z: if (cmd) a = shift ? xs::Action::Redo : xs::Action::Undo; break;
+                        case SDLK_Y: if (cmd) a = xs::Action::Redo; break;
+                        case SDLK_S: if (cmd) a = xs::Action::Save; break;
+                        case SDLK_P: a = xs::Action::Pen; break;
+                        case SDLK_H: a = xs::Action::Highlighter; break;
+                        case SDLK_E: a = xs::Action::Eraser; break;
+                        case SDLK_1: a = xs::Action::SizeFine; break;
+                        case SDLK_2: a = xs::Action::SizeMedium; break;
+                        case SDLK_3: a = xs::Action::SizeThick; break;
+                        case SDLK_LEFT: a = xs::Action::PrevPage; break;
+                        case SDLK_RIGHT: a = xs::Action::NextPage; break;
+                        case SDLK_ESCAPE: a = xs::Action::Exit; break;
+                        default: break;
+                    }
+                    editor.perform(a, now);
+                    break;
+                }
+                case SDL_EVENT_WINDOW_EXPOSED: editor.redrawAll(xs::Refresh::Content); break;
+                default: break;
+            }
+            got = SDL_PollEvent(&ev);
+        }
+        editor.onIdle(SDL_GetTicks());
+        win.present(editor.canvas(), editor.takeDamage());
+    }
+    return 0;
+}

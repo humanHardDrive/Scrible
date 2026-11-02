@@ -1,0 +1,6 @@
+/build/
+/build-*/
+/dist/
+*.xopp.tmp
+.DS_Store
+/xscribe.log
