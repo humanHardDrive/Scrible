@@ -14,6 +14,7 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
+- Lasso selection: move, resize, duplicate and delete groups of strokes
 - Shape recognition, as in Xournal: lines, triangles, quadrilaterals, rectangles,
   circles and ellipses, plus polygons drawn as separate sides and arrows (a line, then
   a "V" at its end)
@@ -46,9 +47,10 @@ cmake --build build -j
 
 Pass a folder to list the notebooks in it, or a `.xopp` file to open just that one.
 Left mouse button draws, right button erases. A drawing tablet gives real pressure.
-Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z redo, Cmd/Ctrl+S save, P/H/E switch tools,
-1/2/3 set the size, ←/→ change pages, N new notebook (in the list), Enter confirms,
-Esc goes back or quits. `--no-eink-sim` shows antialiased ink and no e-ink refresh artifacts.
+Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z redo, Cmd/Ctrl+S save, P/H/E/L switch tools,
+R switches shape recognition, 1/2/3 set the tool's size, Delete removes the selection,
+←/→ change pages, N new notebook (in the list), Enter confirms, Esc goes back or quits.
+`--no-eink-sim` shows antialiased ink and no e-ink refresh artifacts.
 
 `./build/xopp-render file.xopp page.png --page 1` renders a page with the Kindle's
 renderer, which is handy for checking files from desktop Xournal++.
@@ -108,20 +110,30 @@ In the list:
   it (e.g. `Name.xopp.bg.pdf` for an annotated PDF).
 - `<` `>` page through a long list, and EXIT returns to the Kindle home screen.
 
-In a notebook the toolbar is along the top: PEN / MARK / ERASE, sizes S / M / L,
-UNDO / REDO, `<` page `>`, SAVE, BACK, EXIT. Fingers only operate the toolbar, so your
-palm can rest on the page.
+In a notebook the toolbar along the top has UNDO / REDO, `<` page `>`, SAVE, BACK and
+EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
+page. Tap it to open a column of PEN, SHAPE, LASSO, MARK (highlighter) and ERASE. PEN,
+MARK and ERASE show their sizes beside the column, and each keeps its own. Picking one
+puts the tools away again, and so does a finger tap on the page or writing on it.
+Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
+rest on the page.
 
-- Tap PEN again to switch shape recognition on (SHAPE) or off (PEN). With it on,
-  strokes that look like a line, triangle, rectangle, circle and so on are replaced by
-  a clean version. Nearly horizontal or vertical lines are straightened, and right-angled
-  four-sided shapes become exact rectangles. Separate lines that close up become one
-  polygon, and a line followed by a "V" at one end becomes an arrow. Anything else
-  (handwriting, mostly) stays as drawn. If a shape was guessed wrong, one UNDO brings
-  back what you drew.
-- Tap ERASE again to switch between cutting away just what you erase (ERASE) and
-  removing whole strokes (STROKE). The pen's eraser end follows the same setting.
-- Both choices are remembered.
+- LASSO: draw a loop around strokes to select those mostly inside it. Drag inside the
+  dashed frame to move them, or drag the corner handle to resize (line widths scale
+  too). DELETE and DUPLICATE act on the selection, and DONE or a tap elsewhere lets go.
+  Each change is one UNDO. It works on the top layer's strokes; text and images from
+  desktop Xournal++ can't be selected yet.
+
+- SHAPE switches shape recognition on or off; its box is filled while it's on. With it
+  on, strokes that look like a line, triangle, rectangle, circle and so on are replaced
+  by a clean version. Nearly horizontal or vertical lines are straightened, and
+  right-angled four-sided shapes become exact rectangles. Separate lines that close up
+  become one polygon, and a line followed by a "V" at one end becomes an arrow. Anything
+  else (handwriting, mostly) stays as drawn. If a shape was guessed wrong, one UNDO
+  brings back what you drew.
+- ERASE also offers PARTIAL, which cuts away just what you erase, and WHOLE, which
+  removes whole strokes. The pen's eraser end follows the same setting.
+- These choices and each tool's size are remembered.
 - BACK saves and returns to the list; EXIT saves and leaves the app.
 
 ### Troubleshooting

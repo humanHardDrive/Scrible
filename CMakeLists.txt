@@ -45,6 +45,7 @@ add_library(scrible_core STATIC
   src/core/Editor.cpp
   src/core/EinkPanel.cpp
   src/core/Eraser.cpp
+  src/core/Lasso.cpp
   src/core/Library.cpp
   src/core/Png.cpp
   src/core/Renderer.cpp
@@ -52,6 +53,7 @@ add_library(scrible_core STATIC
   src/core/Shapes.cpp
   src/core/TextPrompt.cpp
   src/core/Toolbar.cpp
+  src/core/ToolPanel.cpp
   src/core/XoppFile.cpp)
 target_include_directories(scrible_core PUBLIC src/core)
 target_compile_definitions(scrible_core PRIVATE SCRIBLE_VERSION="${PROJECT_VERSION}")

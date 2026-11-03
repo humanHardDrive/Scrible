@@ -8,6 +8,13 @@
 #include "XoppFile.h"
 
 namespace scrible {
+namespace {
+
+// Settings keys for the size of each tool, indexed by ToolKind, and their values.
+constexpr const char* kSizeKeys[] = {"pen-size", "highlighter-size", "eraser-size"};
+constexpr const char* kSizeNames[] = {"fine", "medium", "thick"};
+
+}  // namespace
 
 App::App(int width, int height, AppOptions opts) : width_(width), height_(height), opts_(std::move(opts)) {
     std::string error;
@@ -35,8 +42,13 @@ bool App::openNotebook(const std::string& path, std::string& error) {
     }
     EditorOptions eo = opts_.editor;
     eo.fromList = library_ != nullptr;
-    if (settings_) eo.eraseWholeStrokes = settings_->get("eraser") == "stroke";
-    if (settings_) eo.recognizeShapes = settings_->get("shapes") == "on";
+    if (settings_) {
+        eo.eraseWholeStrokes = settings_->get("eraser") == "stroke";
+        eo.recognizeShapes = settings_->get("shapes") == "on";
+        for (size_t k = 0; k < eo.sizes.size(); ++k)
+            for (int i = 0; i < 3; ++i)
+                if (settings_->get(kSizeKeys[k]) == kSizeNames[i]) eo.sizes[k] = static_cast<ToolSize>(i);
+    }
     editor_ = std::make_unique<Editor>(width_, height_, std::move(doc), path, eo);
     return true;
 }
@@ -69,8 +81,12 @@ void App::handle(const Library::Intent& intent, uint64_t now) {
 
 void App::afterEditorInput() {
     if (!editor_) return;
-    if (settings_) settings_->set("eraser", editor_->eraseWholeStrokes() ? "stroke" : "partial");
-    if (settings_) settings_->set("shapes", editor_->recognizeShapes() ? "on" : "off");
+    if (settings_) {
+        settings_->set("eraser", editor_->eraseWholeStrokes() ? "stroke" : "partial");
+        settings_->set("shapes", editor_->recognizeShapes() ? "on" : "off");
+        for (size_t k = 0; k < 3; ++k)
+            settings_->set(kSizeKeys[k], kSizeNames[static_cast<int>(editor_->toolSize(static_cast<ToolKind>(k)))]);
+    }
     if (!editor_->closeRequested()) return;
     const bool quit = editor_->quitRequested() || !library_;
     editor_.reset();  // it has saved already

@@ -10,8 +10,10 @@ namespace scrible {
 
 enum class Action {
     None,
-    // editor
-    Pen, Highlighter, Eraser, SizeFine, SizeMedium, SizeThick, Undo, Redo, Save,
+    // editor: the tools panel (Tools opens it; sizes apply to the current tool), and
+    // Delete/Duplicate/Cancel act on a lasso selection
+    Tools, Pen, Shapes, Lasso, Highlighter, Eraser, SizeFine, SizeMedium, SizeThick, ErasePartial, EraseWhole,
+    Undo, Redo, Save,
     // both screens: pages of the notebook, or of the notebook list
     PrevPage, NextPage,
     // editor: close the notebook; library: leave the app

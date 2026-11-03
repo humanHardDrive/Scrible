@@ -15,6 +15,7 @@
 #include "Editor.h"
 #include "EinkPanel.h"
 #include "Eraser.h"
+#include "Lasso.h"
 #include "Shapes.h"
 #include "Renderer.h"
 #include "XoppFile.h"
@@ -374,9 +375,7 @@ TEST(toolbar_layout_fits) {
         const Editor e(width, 1200, Document{}, tempPath("toolbar-fit.xopp"));
         const Toolbar& tb = e.toolbar();
         int lastRight = 0;
-        for (Action a : {Action::Pen, Action::Highlighter, Action::Eraser, Action::SizeFine, Action::SizeMedium,
-                         Action::SizeThick, Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage,
-                         Action::Save, Action::Exit}) {
+        for (Action a : {Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage, Action::Save, Action::Exit}) {
             const IRect r = tb.buttonRect(a);
             CHECK(!r.empty());
             CHECK(r.x0 >= lastRight && r.x1 <= width);
@@ -544,20 +543,26 @@ TEST(editor_eraser_cuts_strokes_and_undo_restores_them) {
 
 TEST(editor_toolbar_and_palm_rejection) {
     Editor e(900, 1200, Document{}, tempPath("toolbar.xopp"));
-    const IRect eraser = center(e.toolbar().buttonRect(Action::Eraser));
-    const IRect pen = center(e.toolbar().buttonRect(Action::Pen));
+    const ToolPanel& tools = e.toolPanel();
+    const IRect tab = center(tools.buttonRect(Action::Tools));
 
-    e.touchDown(eraser.x0, eraser.y0, 10);
+    e.touchDown(tab.x0, tab.y0, 10);
+    const IRect eraser = center(tools.buttonRect(Action::Eraser));
+    const IRect pen = center(tools.buttonRect(Action::Pen));
+    e.touchDown(eraser.x0, eraser.y0, 15);
     CHECK(e.tool() == ToolKind::Eraser);
     e.penDown({double(pen.x0), double(pen.y0), 0.5, false}, 20);
     e.penUp(30);
     CHECK(e.tool() == ToolKind::Pen);
-    CHECK(e.document().pages[0].layers.back().elements.empty());  // toolbar taps don't draw
+    CHECK(e.document().pages[0].layers.back().elements.empty());  // taps on the tools don't draw
 
-    e.penDown({300, 500, 0.5, false}, 40);
-    e.touchDown(eraser.x0, eraser.y0, 45);  // palm on the toolbar while writing
+    e.penDown({500, 500, 0.5, false}, 40);
+    e.touchDown(eraser.x0, eraser.y0, 45);  // palm on the tools while writing
+    const IRect undo = center(e.toolbar().buttonRect(Action::Undo));
+    e.touchDown(undo.x0, undo.y0, 46);  // ...or on the toolbar
     e.penUp(50);
     CHECK(e.tool() == ToolKind::Pen);
+    CHECK(e.document().pages[0].layers.back().elements.size() == 1);
 }
 
 TEST(editor_pages) {
@@ -761,6 +766,12 @@ void tapButton(App& app, const Toolbar& tb, Action a, uint64_t& t) {
 void tapAt(App& app, const IRect& r, uint64_t& t) {
     const IRect c = center(r);
     app.touchDown(c.x0, c.y0, t += 10);
+}
+
+void tapTool(App& app, Action a, uint64_t& t) {
+    const IRect r = app.editor()->toolPanel().buttonRect(a);
+    CHECK(!r.empty());
+    tapAt(app, r, t);
 }
 
 // Types lowercase letters, digits and spaces on the prompt's keyboard.
@@ -1108,9 +1119,8 @@ TEST(editor_toolbar_with_back_and_exit_fits) {
     for (int width : {1072, 1236, 1860, 1986}) {  // Kindle screen widths
         const Editor e(width, 2400, Document{}, tempPath("toolbar-list.xopp"), o);
         int lastRight = 0;
-        for (Action a : {Action::Pen, Action::Highlighter, Action::Eraser, Action::SizeFine, Action::SizeMedium,
-                         Action::SizeThick, Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage,
-                         Action::Save, Action::Exit, Action::Quit}) {
+        for (Action a : {Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage, Action::Save, Action::Exit,
+                         Action::Quit}) {
             const IRect r = e.toolbar().buttonRect(a);
             CHECK(!r.empty() && r.x0 >= lastRight && r.x1 <= width);
             lastRight = r.x1;
@@ -1125,10 +1135,10 @@ TEST(eraser_can_remove_whole_strokes) {
     drawLine(e, 100, 600, 500, t);
     const auto& els = e.document().pages[0].layers.back().elements;
 
-    // Selecting ERASE, then tapping it again, switches to whole strokes.
+    // WHOLE, among the eraser's options, switches to whole strokes.
     e.perform(Action::Eraser, t += 10);
     CHECK(!e.eraseWholeStrokes());
-    e.perform(Action::Eraser, t += 10);
+    e.perform(Action::EraseWhole, t += 10);
     CHECK(e.eraseWholeStrokes() && e.tool() == ToolKind::Eraser);
 
     e.penDown({300, 480, 0.5, false}, t += 10);  // touches the middle of the second stroke only
@@ -1147,9 +1157,8 @@ TEST(eraser_can_remove_whole_strokes) {
     CHECK(els.size() == 1);
 
     // And back to cutting.
-    e.perform(Action::Eraser, t += 10);
-    e.perform(Action::Eraser, t += 10);
-    CHECK(!e.eraseWholeStrokes());
+    e.perform(Action::ErasePartial, t += 10);
+    CHECK(!e.eraseWholeStrokes() && e.tool() == ToolKind::Eraser);
 }
 
 TEST(app_exit_from_a_notebook_and_remembered_eraser) {
@@ -1171,25 +1180,29 @@ TEST(app_exit_from_a_notebook_and_remembered_eraser) {
         open(app, "One");
         if (!app.editor()) return removeDir(dir);
         CHECK(!app.editor()->toolbar().buttonRect(Action::Quit).empty());
-        // Switch the eraser to whole strokes; BACK; another notebook starts that way.
-        tapButton(app, app.editor()->toolbar(), Action::Eraser, t);
-        tapButton(app, app.editor()->toolbar(), Action::Eraser, t);
-        CHECK(app.editor()->eraseWholeStrokes());
+        // Switch the eraser to whole strokes and the pen to thick; BACK; another notebook starts that way.
+        for (Action a : {Action::Tools, Action::Eraser, Action::EraseWhole, Action::Tools, Action::Pen, Action::SizeThick})
+            tapTool(app, a, t);
+        CHECK(app.editor()->eraseWholeStrokes() && app.editor()->toolSize(ToolKind::Pen) == ToolSize::Thick);
         tapButton(app, app.editor()->toolbar(), Action::Exit, t);
         open(app, "Two");
         if (!app.editor()) return removeDir(dir);
-        CHECK(app.editor()->eraseWholeStrokes());
+        CHECK(app.editor()->eraseWholeStrokes() && app.editor()->toolSize(ToolKind::Pen) == ToolSize::Thick);
+        CHECK(app.editor()->toolSize(ToolKind::Eraser) == ToolSize::Medium);
         // EXIT saves and leaves the app straight from the notebook.
-        tapButton(app, app.editor()->toolbar(), Action::Pen, t);
+        for (Action a : {Action::Tools, Action::Pen, Action::Pen}) tapTool(app, a, t);  // again: puts the panel away
         writeIn(app, t);
         tapButton(app, app.editor()->toolbar(), Action::Quit, t);
         CHECK(app.quitRequested());
         Document saved;
         CHECK(loadXopp(dir + "/Two.xopp", saved, err) && saved.pages[0].layers.back().elements.size() == 2);
+        if (saved.pages[0].layers.back().elements.size() == 2)
+            CHECK_NEAR(std::get<Stroke>(saved.pages[0].layers.back().elements[1]).width, 2.26, 1e-6);
     }
     App again(900, 1200, o);  // and after a restart
     open(again, "One");
-    if (again.editor()) CHECK(again.editor()->eraseWholeStrokes());
+    if (again.editor())
+        CHECK(again.editor()->eraseWholeStrokes() && again.editor()->toolSize(ToolKind::Pen) == ToolSize::Thick);
     removeDir(dir);
 }
 
@@ -1374,7 +1387,7 @@ TEST(editor_shape_mode) {
     {
         Editor e(900, 1200, Document{}, tempPath("shapes.xopp"));
         const auto& els = e.document().pages[0].layers.back().elements;
-        e.perform(Action::Pen, t += 10);  // the pen is already selected: tapping it again turns shapes on
+        e.perform(Action::Shapes, t += 10);
         CHECK(e.recognizeShapes());
 
         draw(e, ellipsePath(450, 600, 150, 150, 0, 0.2, 2 * 3.14159 + 0.3, 150), t);
@@ -1419,6 +1432,252 @@ TEST(editor_shape_mode) {
         draw(e, ellipsePath(450, 600, 150, 150, 0, 0, 2 * 3.14159, 150), t);
         CHECK(std::get<Stroke>(e.document().pages[0].layers.back().elements.at(0)).points.size() > 100);
     }
+}
+
+// ---- lasso ----
+
+TEST(lasso_geometry) {
+    const std::vector<StrokePoint> square = {{0, 0}, {100, 0}, {100, 100}, {0, 100}};
+    CHECK(pointInPolygon({50, 50}, square));
+    CHECK(!pointInPolygon({150, 50}, square));
+
+    std::vector<Element> els;
+    Stroke inside, mostly, half;
+    inside.points = {{10, 10}, {50, 50}, {90, 20}};
+    for (int x = 10; x <= 120; x += 10) mostly.points.push_back({double(x), 50});  // 9 of 12 points inside
+    for (int x = 60; x <= 140; x += 10) half.points.push_back({double(x), 70});    // 4 of 9 inside
+    els.push_back(inside);
+    els.push_back(ForeignElement{});  // text and images aren't selectable (yet)
+    els.push_back(mostly);
+    els.push_back(half);
+    CHECK(strokesInLasso(els, square) == (std::vector<size_t>{0, 2}));
+
+    Stroke s;
+    s.width = 2;
+    s.points = {{10, 10}, {20, 30}};
+    s.segmentWidths = {1.5};
+    const Stroke big = scaledStroke(s, {10, 10}, 2);
+    CHECK(near(big.points[1], {30, 50}, 1e-9) && big.width == 4 && big.segmentWidths[0] == 3);
+    CHECK(near(movedStroke(s, 5, -5).points[0], {15, 5}, 1e-9));
+}
+
+TEST(editor_lasso_select_move_resize_delete_duplicate) {
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, Document{}, tempPath("lasso.xopp"), o);
+    EinkPanel panel(1860, 2480);
+    auto flush = [&] {
+        for (const Damage& d : e.takeDamage()) panel.refresh(e.canvas(), d);
+    };
+    uint64_t t = 1000;
+    auto path = [&](const std::vector<StrokePoint>& pts, bool eraser = false) {
+        e.penDown({pts[0].x, pts[0].y, 0.5, eraser}, t += 10);
+        flush();
+        for (size_t i = 1; i < pts.size(); ++i) {
+            e.penMove({pts[i].x, pts[i].y, 0.5, eraser}, t += 20);
+            e.onIdle(t);
+            flush();
+        }
+        e.penUp(t += 10);
+        flush();
+    };
+    auto tap = [&](const IRect& r) {
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+    };
+    const auto& els = e.document().pages[0].layers.back().elements;
+    path(handDrawn({{300, 600}, {500, 620}}, 6, 1, 31));
+    path(handDrawn({{600, 600}, {800, 640}}, 6, 1, 32));
+    path(handDrawn({{300, 1500}, {900, 1500}}, 6, 1, 33));
+    e.onIdle(t += 1000);
+    flush();
+    const Stroke first = std::get<Stroke>(els[0]);
+
+    // A loop around the first two strokes selects them.
+    e.perform(Action::Lasso, t += 10);
+    path(handDrawn({{250, 520}, {850, 520}, {850, 720}, {250, 720}, {250, 530}}, 8, 1, 34));
+    CHECK(e.selection() == (std::vector<size_t>{0, 1}));
+    CHECK(!e.selectionFrame().empty() && !e.selectionButton(Action::Delete).empty());
+
+    // Drag inside the frame: moves them.
+    const IRect frame = center(e.selectionFrame());
+    path({{double(frame.x0), double(frame.y0)}, {frame.x0 + 100.0, frame.y0 + 150.0}, {frame.x0 + 200.0, frame.y0 + 300.0}});
+    const double scale = 1860 / e.document().pages[0].width;
+    CHECK_NEAR(std::get<Stroke>(els[0]).points[0].x, first.points[0].x + 200 / scale, 1e-6);
+    CHECK_NEAR(std::get<Stroke>(els[0]).points[0].y, first.points[0].y + 300 / scale, 1e-6);
+    CHECK(e.selection().size() == 2);  // still selected, ready for more
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.selection().empty());
+    CHECK_NEAR(std::get<Stroke>(els[0]).points[0].x, first.points[0].x, 1e-9);
+    e.perform(Action::Redo, t += 10);
+    flush();
+
+    // Select again and resize with the handle: twice the size, lines twice as wide.
+    path(handDrawn({{450, 820}, {1050, 820}, {1050, 1020}, {450, 1020}, {450, 830}}, 8, 1, 35));
+    CHECK(e.selection().size() == 2);
+    const RectF before = std::get<Stroke>(els[0]).bounds();
+    const double widthBefore = std::get<Stroke>(els[0]).width;
+    const IRect f = e.selectionFrame(), h = center(e.selectionHandle());
+    path({{double(h.x0), double(h.y0)}, {h.x0 + f.width() * 0.5, h.y0 + f.height() * 0.5},
+          {double(h.x0 + f.width()), double(h.y0 + f.height())}});
+    CHECK(std::get<Stroke>(els[0]).width > 1.7 * widthBefore);
+    CHECK(std::get<Stroke>(els[0]).bounds().x1 - std::get<Stroke>(els[0]).bounds().x0 > 1.7 * (before.x1 - before.x0));
+
+    // Duplicate (with a finger), then delete the copies, then undo that.
+    tap(e.selectionButton(Action::Duplicate));
+    CHECK(els.size() == 5 && e.selection() == (std::vector<size_t>{3, 4}));
+    tap(e.selectionButton(Action::Delete));
+    CHECK(els.size() == 3 && e.selection().empty());
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(els.size() == 5);
+
+    // DONE, or a tap elsewhere, lets go of the selection.
+    path(handDrawn({{250, 1400}, {950, 1400}, {950, 1600}, {250, 1600}, {250, 1410}}, 8, 1, 36));
+    CHECK(e.selection() == (std::vector<size_t>{2}));
+    tap(e.selectionButton(Action::Cancel));
+    CHECK(e.selection().empty());
+    path(handDrawn({{250, 1400}, {950, 1400}, {950, 1600}, {250, 1600}, {250, 1410}}, 8, 1, 37));
+    CHECK(!e.selection().empty());
+    e.penDown({1500, 2200, 0.5, false}, t += 10);
+    e.penUp(t += 10);
+    flush();
+    CHECK(e.selection().empty());
+
+    // Through all of it, the fast refreshes left nothing stale on the panel.
+    e.onIdle(t += 1000);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+}
+
+// ---- the tools panel along the left edge ----
+
+TEST(tool_panel_opens_picks_and_puts_itself_away) {
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, Document{}, tempPath("tool-panel.xopp"), o);
+    EinkPanel panel(1860, 2480);
+    std::vector<Damage> last;
+    auto flush = [&] {
+        last = e.takeDamage();
+        for (const Damage& d : last) panel.refresh(e.canvas(), d);
+    };
+    flush();
+    uint64_t t = 1000;
+    const ToolPanel& tools = e.toolPanel();
+    auto tap = [&](Action a) {
+        const IRect r = tools.buttonRect(a);
+        CHECK(!r.empty());
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+    };
+    auto path = [&](const std::vector<StrokePoint>& pts) {
+        e.penDown({pts[0].x, pts[0].y, 0.5, false}, t += 10);
+        flush();
+        for (size_t i = 1; i < pts.size(); ++i) {
+            for (int k = 1; k <= 10; ++k) {
+                const double f = k / 10.0;
+                e.penMove({pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f, pts[i - 1].y + (pts[i].y - pts[i - 1].y) * f,
+                           0.5, false},
+                          t += 5);
+                flush();
+            }
+        }
+        e.penUp(t += 5);
+        flush();
+    };
+    const auto& els = e.document().pages[0].layers.back().elements;
+
+    // Hidden, it's just a tab at the left edge, under the toolbar.
+    const IRect tab = tools.buttonRect(Action::Tools);
+    CHECK(!tools.open() && tools.rects().size() == 1);
+    CHECK(tab.x0 == 0 && tab.y0 >= e.toolbar().rect().y1 && tab.width() < 250);
+
+    // The tab opens the column, quickly: black and white with DU. PEN, SHAPE, LASSO, MARK, ERASE.
+    tap(Action::Tools);
+    CHECK(tools.open() && tools.buttonRect(Action::Tools).empty());
+    CHECK(!last.empty());
+    for (const Damage& d : last) CHECK(d.mode == Refresh::UI);
+    int lastY = 0;
+    for (Action a : {Action::Pen, Action::Shapes, Action::Lasso, Action::Highlighter, Action::Eraser}) {
+        const IRect r = tools.buttonRect(a);
+        CHECK(!r.empty() && r.y0 >= lastY && r.x0 < 30);
+        lastY = r.y1;
+    }
+
+    // LASSO is picked, and the panel goes away.
+    tap(Action::Lasso);
+    CHECK(e.tool() == ToolKind::Lasso && !tools.open());
+
+    // PEN brings up its widths beside the column; THICK changes the pen's alone.
+    tap(Action::Tools);
+    tap(Action::Pen);
+    CHECK(e.tool() == ToolKind::Pen && tools.options() == Action::Pen);
+    CHECK(tools.buttonRect(Action::SizeThick).x0 > tools.buttonRect(Action::Pen).x1);
+    CHECK(tools.buttonRect(Action::EraseWhole).empty());
+    tap(Action::SizeThick);
+    CHECK(!tools.open() && e.toolSize(ToolKind::Pen) == ToolSize::Thick);
+    CHECK(e.toolSize(ToolKind::Highlighter) == ToolSize::Medium && e.toolSize(ToolKind::Eraser) == ToolSize::Medium);
+    path({{600, 900}, {1200, 900}});
+    CHECK(els.size() == 1);
+    if (els.size() == 1) CHECK_NEAR(std::get<Stroke>(els[0]).width, 2.26, 1e-9);
+
+    // SHAPE switches recognition on, and goes back to the pen.
+    tap(Action::Tools);
+    tap(Action::Highlighter);
+    tap(Action::Shapes);
+    CHECK(e.recognizeShapes() && e.tool() == ToolKind::Pen && !tools.open());
+
+    // From the pen's options straight to the eraser's, which also offer whole strokes.
+    tap(Action::Tools);
+    tap(Action::Pen);
+    tap(Action::Eraser);
+    CHECK(tools.options() == Action::Eraser && !tools.buttonRect(Action::EraseWhole).empty());
+    // The pen's options uncover the margin line; DU over it must not get there first (see takeDamage).
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+    tap(Action::EraseWhole);
+    CHECK(e.eraseWholeStrokes() && e.tool() == ToolKind::Eraser && !tools.open());
+
+    // Tapping the tool again puts the panel away, and so does a finger on the page.
+    tap(Action::Tools);
+    tap(Action::Pen);
+    tap(Action::Pen);
+    CHECK(!tools.open() && e.tool() == ToolKind::Pen);
+    tap(Action::Tools);
+    e.touchDown(1000, 1500, t += 10);
+    flush();
+    CHECK(!tools.open() && els.size() == 1);
+
+    // Writing beside the open panel puts it away when the pen lifts, and the stroke counts.
+    tap(Action::Tools);
+    path({{600, 1200}, {1200, 1200}});
+    CHECK(!tools.open() && els.size() == 2);
+
+    // Ink passing under the tab doesn't cover it, before or after the cleanup refresh.
+    const int mid = (tab.y0 + tab.y1) / 2;
+    path({{600, double(mid)}, {20, double(mid)}});
+    CHECK(els.size() == 3);
+    CHECK(e.canvas().at(tab.x0 + 8, mid) == 255);
+    e.onIdle(t += 1000);
+    flush();
+    CHECK(e.canvas().at(tab.x0 + 8, mid) == 255);
+
+    // A selection up by the tab keeps its buttons clear of it.
+    path({{300, 320}, {600, 320}});
+    tap(Action::Tools);
+    tap(Action::Lasso);
+    path({{260, 280}, {640, 280}, {640, 360}, {260, 360}, {262, 285}});
+    CHECK(e.selection().size() == 1);
+    const IRect del = e.selectionButton(Action::Delete);
+    CHECK(!del.empty() && (del.x0 >= tab.x1 || del.y0 >= tab.y1 || del.y1 <= tab.y0));
+
+    // Through all of it, the fast refreshes left nothing stale on the panel.
+    e.onIdle(t += 1000);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
 }
 
 int main() {

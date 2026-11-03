@@ -5,6 +5,7 @@
 // and how they should be refreshed. The Kindle and desktop front ends only move
 // input in and pixels out.
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -13,6 +14,7 @@
 #include "Canvas.h"
 #include "Document.h"
 #include "Renderer.h"
+#include "ToolPanel.h"
 #include "Toolbar.h"
 
 namespace scrible {
@@ -40,8 +42,7 @@ struct PenSample {
     bool eraser = false;    // eraser end of the pen (or side button held)
 };
 
-enum class ToolKind { Pen, Highlighter, Eraser };
-enum class ToolSize { Fine, Medium, Thick };
+enum class ToolKind { Pen, Highlighter, Eraser, Lasso };
 
 struct EditorOptions {
     RenderStyle render;  // the Kindle turns antialiasing off (see RenderStyle)
@@ -50,6 +51,7 @@ struct EditorOptions {
     bool fromList = false;
     bool eraseWholeStrokes = false;  // eraser mode to start in
     bool recognizeShapes = false;    // pen mode to start in (SHAPE rather than PEN)
+    std::array<ToolSize, 3> sizes{ToolSize::Medium, ToolSize::Medium, ToolSize::Medium};  // pen, highlighter, eraser
     int toolbarHeight = 120;
     double dpi = 300;  // sizes new notebooks so a page fills the screen
     std::string pageStyle = "lined";
@@ -64,12 +66,21 @@ public:
     Canvas& canvas() { return canvas_; }
     const Document& document() const { return doc_; }
     const Toolbar& toolbar() const { return toolbar_; }
+    const ToolPanel& toolPanel() const { return panel_; }
     const std::string& path() const { return path_; }
     size_t pageIndex() const { return page_; }
     ToolKind tool() const { return tool_; }
     bool modified() const { return modified_; }
     bool eraseWholeStrokes() const { return eraseWhole_; }
     bool recognizeShapes() const { return shapes_; }
+    ToolSize toolSize(ToolKind t) const { return t == ToolKind::Lasso ? ToolSize::Medium : sizes_[static_cast<size_t>(t)]; }
+
+    // Lasso selection (strokes of the top layer), and its on-screen frame, resize
+    // handle and buttons; empty when nothing is selected.
+    const std::vector<size_t>& selection() const { return sel_.indices; }
+    IRect selectionFrame() const;
+    IRect selectionHandle() const;
+    IRect selectionButton(Action a) const;
     // BACK or EXIT was tapped and the notebook is saved (or the user chose to leave
     // it unsaved). quitRequested() tells EXIT (leave the app) from BACK.
     bool closeRequested() const { return close_; }
@@ -109,7 +120,14 @@ private:
         std::vector<ElementEdit> edits;  // Edit: drawing a stroke, or an eraser gesture
         std::optional<Page> pageData;    // AddPage: filled while undone
     };
-    enum class Gesture { None, Draw, Erase, Toolbar };
+    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag };
+    enum class DragKind { Move, Resize };
+    struct OverlayButton {
+        Action action;
+        std::string label;
+        IRect r;
+    };
+    bool penBusy() const { return gesture_ != Gesture::None && gesture_ != Gesture::Toolbar; }
 
     Page& currentPage() { return doc_.pages[page_]; }
     size_t currentLayer();
@@ -121,7 +139,22 @@ private:
     void setPage(size_t index);
     void addPage(uint64_t now);
     void eraseAt(const PenSample& s, uint64_t now);
-    void previewErase(const IRect& r, uint64_t now);
+    void previewArea(const IRect& r, uint64_t now);
+
+    void select(std::vector<size_t> indices);
+    void clearSelection();
+    RectF selectedBounds() const;
+    void layoutOverlay();
+    IRect overlayArea() const;
+    void drawOverlay(const IRect& clip);
+    void lassoTo(const StrokePoint& p);
+    void finishLasso();
+    void startDrag(DragKind kind, const StrokePoint& p);
+    void dragTo(const StrokePoint& p);
+    void dragFrame(uint64_t now);
+    void finishDrag(uint64_t now);
+    void deleteSelection(uint64_t now);
+    void duplicateSelection(uint64_t now);
     void commitStroke(uint64_t now);
     void recognize(size_t layer);
     void pushUndo(UndoAction a);
@@ -131,7 +164,12 @@ private:
     void afterHistoryChange(size_t page, const RectF& changed, uint64_t now);
 
     void repaint(const IRect& r, Refresh mode);
+    void drawChrome(const IRect& clip);
     ToolbarState toolbarState() const;
+    ToolPanelState panelState() const;
+    void refreshPanel(const std::vector<IRect>& before);
+    void closePanel();
+    void keepPanelOnTop(const IRect& r);
     void updateToolbar();
     void markModified(uint64_t now);
     void setStatus(const std::string& text, uint64_t now, uint64_t durationMs = 1500);
@@ -142,13 +180,15 @@ private:
     Canvas canvas_;
     Toolbar toolbar_;
     IRect pageArea_;
+    ToolPanel panel_;
+    bool closePanelOnUp_ = false;  // the pen came down beside the open panel
     Document doc_;
     std::string path_;
     size_t page_ = 0;
     PageTransform xf_;
 
     ToolKind tool_ = ToolKind::Pen;
-    ToolSize size_ = ToolSize::Medium;
+    std::array<ToolSize, 3> sizes_;  // indexed by ToolKind
     bool eraseWhole_ = false;  // eraser removes whole strokes instead of cutting them
     bool shapes_ = false;      // pen strokes are recognized as shapes
     // Lines recognized one after another, which may still close into a polygon or
@@ -161,6 +201,24 @@ private:
         std::vector<StrokePoint> points;
     };
     ShapeChain chain_;
+
+    struct Selection {
+        bool active = false;
+        size_t layer = 0;
+        std::vector<size_t> indices;  // ascending
+        RectF bounds;
+    };
+    Selection sel_;
+    std::vector<OverlayButton> overlayButtons_;
+    std::vector<StrokePoint> lasso_;  // the loop being drawn (page coordinates)
+    IRect lassoArea_;
+    double lassoDots_ = 0;  // distance since the last dot of the dotted outline
+    DragKind dragKind_ = DragKind::Move;
+    StrokePoint dragStart_{0, 0};
+    std::vector<Stroke> dragOriginals_;  // the selection as it was when the drag started
+    RectF dragFrom_;
+    IRect dragDirty_;
+    uint64_t lastDragFrame_ = 0;
     Gesture gesture_ = Gesture::None;
     Stroke live_;
     std::vector<double> livePointWidths_;

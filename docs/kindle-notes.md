@@ -48,9 +48,9 @@ Use the "Scrible Input Test" library entry to re-check orientation; fix it with
 - Pen ink is drawn without antialiasing on the device. A thin antialiased line is mostly
   gray pixels, which DU turns white while you write, and then the grayscale cleanup
   "fills it in". Users noticed exactly that change.
-- Waveforms used: **DU** for ink, the eraser preview and the toolbar (fast, black/white
-  only); **GC16, partial** for undo/redo and the cleanup after the pen rests; **GC16 +
-  flash** for page changes.
+- Waveforms used: **DU** for ink, the eraser preview, the toolbar and the tools panel
+  (fast, black/white only); **GC16, partial** for undo/redo and the cleanup after the
+  pen rests; **GC16 + flash** for page changes.
 - **DU can't draw gray.** A pixel whose new value is gray keeps showing its old value, and
   the controller records it as updated anyway. A later partial update (which only drives
   pixels whose value changed) won't fix it; only a flashing update does. Erasing with DU
@@ -58,6 +58,11 @@ Use the "Scrible Input Test" library entry to re-check orientation; fix it with
   Rules that follow from this:
   - Only send DU strictly black/white content. The toolbar never uses gray (disabled
     buttons are checkered).
+  - Within one batch, GC16 goes out before DU. The editor sends one rectangle per
+    waveform, and the DU one (toolbar plus tools panel) can span page pixels that the
+    GC16 one repaints, e.g. where a closing panel uncovers a rule line. Sent first, DU
+    would mark those gray pixels done without drawing them; sent after, it finds them
+    unchanged and leaves them alone.
   - Erasing shows a black/white version of the erased area right away (rule lines and
     highlights there turn white), then repaints the real content with GC16 once the pen
     rests. Those pixels really change from white to gray then, so the controller redraws

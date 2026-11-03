@@ -1,8 +1,10 @@
 #include "Editor.h"
 
+#include <cmath>
 #include <cstdio>
 
 #include "Eraser.h"
+#include "Lasso.h"
 #include "Shapes.h"
 #include "XoppFile.h"
 
@@ -12,18 +14,17 @@ namespace {
 constexpr uint8_t kOffPageGray = 220;
 constexpr double kMinPointDistPx = 0.75;  // closer samples are dropped
 constexpr size_t kMaxUndo = 1000;
+constexpr uint64_t kDragFrameMs = 50;  // at most this often while moving a selection (e-ink can't keep up)
+constexpr int kFramePad = 14, kHandle = 24, kOverlayScale = 3;
 
 // Preset widths (points) of the original Xournal, indexed by ToolSize.
 constexpr double kPenWidths[] = {0.85, 1.41, 2.26};
 constexpr double kHighlighterWidths[] = {2.83, 8.50, 19.84};
 constexpr double kEraserWidths[] = {2.83, 8.50, 19.84};
 
+// The drawing tools are in the panel along the left edge (ToolPanel).
 ToolbarGroups editorToolbar(bool fromList) {
     ToolbarGroups g = {
-        // Buttons are sized for their longer label: the pen is "SHAPE" while recognizing
-        // shapes, the eraser "STROKE" while removing whole strokes.
-        {{Action::Pen, "SHAPE"}, {Action::Highlighter, "MARK"}, {Action::Eraser, "STROKE"}},
-        {{Action::SizeFine, "S"}, {Action::SizeMedium, "M"}, {Action::SizeThick, "L"}},
         {{Action::Undo, "UNDO"}, {Action::Redo, "REDO"}},
         {{Action::PrevPage, "<"}, {Action::None, "000/000"}, {Action::NextPage, ">"}},
         {{Action::Save, "SAVE*"}},
@@ -43,8 +44,10 @@ Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path
       canvas_(screenWidth, screenHeight),
       toolbar_(screenWidth, opts_.toolbarHeight, editorToolbar(opts_.fromList)),
       pageArea_{0, opts_.toolbarHeight, screenWidth, screenHeight},
+      panel_(pageArea_),
       doc_(std::move(doc)),
       path_(std::move(path)),
+      sizes_(opts_.sizes),
       eraseWhole_(opts_.eraseWholeStrokes),
       shapes_(opts_.recognizeShapes) {
     if (doc_.pages.empty()) {
@@ -65,11 +68,11 @@ size_t Editor::currentLayer() {
 IRect Editor::drawingClip() const { return xf_.pageRect(doc_.pages[page_]).intersected(pageArea_); }
 
 double Editor::toolWidth() const {
-    const auto i = static_cast<size_t>(size_);
-    return tool_ == ToolKind::Highlighter ? kHighlighterWidths[i] : kPenWidths[i];
+    if (tool_ == ToolKind::Highlighter) return kHighlighterWidths[static_cast<size_t>(toolSize(ToolKind::Highlighter))];
+    return kPenWidths[static_cast<size_t>(toolSize(ToolKind::Pen))];
 }
 
-double Editor::eraserWidth() const { return kEraserWidths[static_cast<size_t>(size_)]; }
+double Editor::eraserWidth() const { return kEraserWidths[static_cast<size_t>(toolSize(ToolKind::Eraser))]; }
 
 double Editor::pointWidth(const PenSample& s) const {
     if (tool_ == ToolKind::Highlighter) return toolWidth();
@@ -81,15 +84,26 @@ double Editor::pointWidth(const PenSample& s) const {
 
 ToolbarState Editor::toolbarState() const {
     ToolbarState s;
-    static constexpr Action tools[] = {Action::Pen, Action::Highlighter, Action::Eraser};
-    static constexpr Action sizes[] = {Action::SizeFine, Action::SizeMedium, Action::SizeThick};
-    s.active = {tools[static_cast<int>(tool_)], sizes[static_cast<int>(size_)]};
     if (undo_.empty()) s.disabled.push_back(Action::Undo);
     if (redo_.empty()) s.disabled.push_back(Action::Redo);
-    s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"},
-                {Action::Pen, shapes_ ? "SHAPE" : "PEN"},
-                {Action::Eraser, eraseWhole_ ? "STROKE" : "ERASE"}};
+    s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"}};
     s.text = !status_.empty() ? status_ : std::to_string(page_ + 1) + "/" + std::to_string(doc_.pages.size());
+    return s;
+}
+
+ToolPanelState Editor::panelState() const {
+    static constexpr Action tools[] = {Action::Pen, Action::Highlighter, Action::Eraser, Action::Lasso};
+    ToolPanelState s;
+    s.tool = tools[static_cast<int>(tool_)];
+    s.shapes = shapes_;
+    s.eraseWhole = eraseWhole_;
+    if (tool_ != ToolKind::Lasso) {
+        const double* widths = tool_ == ToolKind::Pen           ? kPenWidths
+                               : tool_ == ToolKind::Highlighter ? kHighlighterWidths
+                                                                : kEraserWidths;
+        s.size = toolSize(tool_);
+        for (size_t i = 0; i < 3; ++i) s.widthsPx[i] = widths[i] * xf_.scale;
+    }
     return s;
 }
 
@@ -97,6 +111,7 @@ void Editor::redrawAll(Refresh mode) {
     toolbar_.draw(canvas_, toolbarState());
     canvas_.fill(pageArea_, kOffPageGray);
     drawPage(canvas_, currentPage(), xf_, pageArea_, opts_.render);
+    drawChrome(pageArea_);
     damage_.clear();
     damage_.push_back({canvas_.rect(), mode});
 }
@@ -106,7 +121,50 @@ void Editor::repaint(const IRect& r, Refresh mode) {
     if (area.empty()) return;
     canvas_.fill(area, kOffPageGray);
     drawPage(canvas_, currentPage(), xf_, area, opts_.render);
+    drawChrome(area);
     damage_.push_back({area, mode});
+}
+
+// What goes over the page: the selection's frame and buttons, then the tools panel.
+void Editor::drawChrome(const IRect& clip) {
+    if (sel_.active) drawOverlay(clip);
+    panel_.draw(canvas_, panelState(), clip);
+}
+
+// Shows the panel's new state. Covering more of the page (or changing in place)
+// only draws black and white, so it goes out with DU; whatever it uncovers is
+// repainted from the document and needs the grayscale waveform.
+void Editor::refreshPanel(const std::vector<IRect>& before) {
+    const std::vector<IRect> after = panel_.rects();
+    IRect uncovered;
+    for (const IRect& r : before) {
+        bool covered = false;
+        for (const IRect& n : after) covered = covered || n.contains(r);
+        if (!covered) uncovered = uncovered.united(r);
+    }
+    repaint(uncovered, Refresh::Content);
+    for (const IRect& r : after) {
+        if (uncovered.contains(r)) continue;  // drawn just now
+        panel_.draw(canvas_, panelState(), r);
+        damage_.push_back({r, Refresh::UI});
+    }
+}
+
+void Editor::closePanel() {
+    closePanelOnUp_ = false;
+    if (!panel_.open()) return;
+    const std::vector<IRect> before = panel_.rects();
+    panel_.setOpen(false);
+    refreshPanel(before);
+}
+
+// Ink and the lasso's dots are drawn straight onto the canvas: the panel stays on top.
+void Editor::keepPanelOnTop(const IRect& r) {
+    for (const IRect& p : panel_.rects()) {
+        if (p.intersected(r).empty()) continue;
+        panel_.draw(canvas_, panelState(), r);
+        return;
+    }
 }
 
 void Editor::updateToolbar() {
@@ -124,7 +182,11 @@ std::vector<Damage> Editor::takeDamage() {
         }
     }
     // One rectangle per refresh mode is plenty: changes within a batch are local.
-    for (Refresh m : {Refresh::Ink, Refresh::UI, Refresh::Content}) {
+    // Content goes before UI: the UI rectangle (toolbar and tools panel together) can
+    // span page pixels that the Content one repaints, and DU reaching them first would
+    // leave them stale (see Refresh). After the Content refresh they are unchanged, so
+    // DU passes over them.
+    for (Refresh m : {Refresh::Ink, Refresh::Content, Refresh::UI}) {
         IRect u;
         for (const Damage& d : damage_)
             if (d.mode == m) u = u.united(d.rect);
@@ -155,8 +217,35 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         perform(toolbar_.hit(x, y), now);
         return;
     }
+    if (panel_.covers(x, y)) {
+        gesture_ = Gesture::Toolbar;
+        perform(panel_.hit(x, y), now);
+        return;
+    }
+    // Writing beside the open panel puts it away, once the pen lifts: repainting
+    // what it covers needs the slow waveform, which mustn't delay the ink.
+    closePanelOnUp_ = panel_.open();
+    if (sel_.active) {
+        for (const OverlayButton& b : overlayButtons_) {
+            if (!b.r.contains(x, y)) continue;
+            gesture_ = Gesture::Toolbar;
+            perform(b.action, now);
+            return;
+        }
+        const StrokePoint p{xf_.toPageX(s.x), xf_.toPageY(s.y)};
+        if (!s.eraser && selectionHandle().grown(16).contains(x, y)) return startDrag(DragKind::Resize, p);
+        if (!s.eraser && selectionFrame().contains(x, y)) return startDrag(DragKind::Move, p);
+        clearSelection();  // tapping elsewhere lets go of it
+    }
     if (!drawingClip().contains(x, y)) return;
 
+    if (tool_ == ToolKind::Lasso && !s.eraser) {
+        gesture_ = Gesture::Lasso;
+        lasso_ = {{xf_.toPageX(s.x), xf_.toPageY(s.y)}};
+        lassoArea_ = {};
+        lassoDots_ = 0;
+        return;
+    }
     if (s.eraser || tool_ == ToolKind::Eraser) {
         gesture_ = Gesture::Erase;
         pendingErase_ = UndoAction{UndoAction::Kind::Edit, page_, currentLayer(), {}, std::nullopt};
@@ -179,7 +268,9 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
     Stroke dot = live_;
     dot.points.push_back(dot.points[0]);
     if (!hl) dot.segmentWidths = {livePointWidths_[0]};
-    damage_.push_back({drawLiveSegment(canvas_, dot, 0, xf_, drawingClip(), opts_.render), Refresh::Ink});
+    const IRect drawn = drawLiveSegment(canvas_, dot, 0, xf_, drawingClip(), opts_.render);
+    keepPanelOnTop(drawn);
+    damage_.push_back({drawn, Refresh::Ink});
 }
 
 void Editor::penMove(const PenSample& s, uint64_t now) {
@@ -188,9 +279,15 @@ void Editor::penMove(const PenSample& s, uint64_t now) {
         eraseAt(s, now);
         return;
     }
+    const StrokePoint p{xf_.toPageX(s.x), xf_.toPageY(s.y)};
+    if (gesture_ == Gesture::Lasso) return lassoTo(p);
+    if (gesture_ == Gesture::Drag) {
+        dragTo(p);
+        if (now >= lastDragFrame_ + kDragFrameMs) dragFrame(now);
+        return;
+    }
     if (gesture_ != Gesture::Draw) return;
 
-    const StrokePoint p{xf_.toPageX(s.x), xf_.toPageY(s.y)};
     const StrokePoint& last = live_.points.back();
     const double dx = (p.x - last.x) * xf_.scale, dy = (p.y - last.y) * xf_.scale;
     if (dx * dx + dy * dy < kMinPointDistPx * kMinPointDistPx) return;
@@ -199,24 +296,35 @@ void Editor::penMove(const PenSample& s, uint64_t now) {
     livePointWidths_.push_back(pointWidth(s));
     const size_t i = live_.points.size() - 2;
     if (live_.tool == StrokeTool::Pen) live_.segmentWidths.push_back((livePointWidths_[i] + livePointWidths_[i + 1]) / 2);
-    damage_.push_back({drawLiveSegment(canvas_, live_, i, xf_, drawingClip(), opts_.render), Refresh::Ink});
+    const IRect drawn = drawLiveSegment(canvas_, live_, i, xf_, drawingClip(), opts_.render);
+    keepPanelOnTop(drawn);
+    damage_.push_back({drawn, Refresh::Ink});
 }
 
 void Editor::penUp(uint64_t now) {
     penActivity(now);
     if (gesture_ == Gesture::Draw) {
         commitStroke(now);
+    } else if (gesture_ == Gesture::Lasso) {
+        finishLasso();
+    } else if (gesture_ == Gesture::Drag) {
+        finishDrag(now);
     } else if (gesture_ == Gesture::Erase && !pendingErase_.edits.empty()) {
         pushUndo(std::move(pendingErase_));
         markModified(now);
     }
     pendingErase_ = UndoAction{};
     gesture_ = Gesture::None;
+    if (closePanelOnUp_) closePanel();
 }
 
 void Editor::touchDown(int x, int y, uint64_t now) {
     if (gesture_ != Gesture::None) return;  // the pen is busy; this is a palm
-    if (toolbar_.rect().contains(x, y)) perform(toolbar_.hit(x, y), now);
+    if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y), now);
+    if (panel_.covers(x, y)) return perform(panel_.hit(x, y), now);
+    for (const OverlayButton& b : overlayButtons_)
+        if (sel_.active && b.r.contains(x, y)) return perform(b.action, now);
+    closePanel();  // fingers don't draw, so a tap elsewhere just puts the tools away
 }
 
 void Editor::commitStroke(uint64_t now) {
@@ -343,14 +451,15 @@ void Editor::eraseAt(const PenSample& s, uint64_t now) {
             ++i;
         }
     }
-    if (changed.valid) previewErase(xf_.toScreen(changed), now);
+    if (changed.valid) previewArea(xf_.toScreen(changed), now);
 }
 
-void Editor::previewErase(const IRect& r, uint64_t now) {
+void Editor::previewArea(const IRect& r, uint64_t now) {
     const IRect area = r.intersected(pageArea_);
     if (area.empty()) return;
     canvas_.fill(area, kOffPageGray);
     drawPage(canvas_, currentPage(), xf_, area, opts_.render);
+    drawChrome(area);
     // Shown right away with fast DU, which can only draw black and white, so the
     // preview is strictly black and white: rule lines and highlights in the area
     // vanish for a moment. (Sending their real gray with DU would leave the old
@@ -364,32 +473,306 @@ void Editor::previewErase(const IRect& r, uint64_t now) {
     scheduleSettle(area, now);
 }
 
+// ---- lasso selection ----
+
+void Editor::lassoTo(const StrokePoint& p) {
+    const StrokePoint last = lasso_.back();
+    const double ax = xf_.toScreenX(last.x), ay = xf_.toScreenY(last.y);
+    const double bx = xf_.toScreenX(p.x), by = xf_.toScreenY(p.y);
+    const double len = std::hypot(bx - ax, by - ay);
+    if (len < 3) return;
+    lasso_.push_back(p);
+    // A dotted outline, so it doesn't look like ink.
+    const IRect clip = drawingClip();
+    IRect drawn;
+    for (double d = 8 - lassoDots_; d <= len; d += 8) {
+        const int x = static_cast<int>(ax + (bx - ax) * d / len), y = static_cast<int>(ay + (by - ay) * d / len);
+        const IRect dot = IRect{x - 2, y - 2, x + 2, y + 2}.intersected(clip);
+        canvas_.fill(dot, 0);
+        drawn = drawn.united(dot);
+    }
+    lassoDots_ = std::fmod(lassoDots_ + len, 8.0);
+    if (drawn.empty()) return;
+    keepPanelOnTop(drawn);
+    lassoArea_ = lassoArea_.united(drawn);
+    damage_.push_back({drawn, Refresh::Ink});
+}
+
+void Editor::finishLasso() {
+    std::vector<size_t> picked = strokesInLasso(currentPage().layers[currentLayer()].elements, lasso_);
+    IRect area = lassoArea_;
+    lasso_.clear();
+    lassoArea_ = {};
+    if (!picked.empty()) {
+        select(std::move(picked));
+        area = area.united(overlayArea());
+    }
+    // The dotted outline goes, over gray rule lines too, so not DU.
+    repaint(area, Refresh::Content);
+}
+
+void Editor::select(std::vector<size_t> indices) {
+    sel_.active = true;
+    sel_.layer = currentLayer();
+    sel_.indices = std::move(indices);
+    sel_.bounds = selectedBounds();
+    layoutOverlay();
+}
+
+void Editor::clearSelection() {
+    if (!sel_.active) return;
+    const IRect area = overlayArea();
+    sel_ = Selection{};
+    overlayButtons_.clear();
+    repaint(area, Refresh::Content);
+}
+
+RectF Editor::selectedBounds() const {
+    RectF r;
+    const auto& els = doc_.pages[page_].layers[sel_.layer].elements;
+    for (size_t i : sel_.indices) {
+        const RectF b = elementBounds(els[i]);
+        if (!b.valid) continue;
+        r.add(b.x0, b.y0);
+        r.add(b.x1, b.y1);
+    }
+    return r;
+}
+
+IRect Editor::selectionFrame() const { return sel_.active ? xf_.toScreen(sel_.bounds).grown(kFramePad) : IRect{}; }
+
+IRect Editor::selectionHandle() const {
+    if (!sel_.active) return {};
+    const IRect f = selectionFrame();
+    return {f.x1 - kHandle, f.y1 - kHandle, f.x1 + kHandle, f.y1 + kHandle};
+}
+
+IRect Editor::selectionButton(Action a) const {
+    for (const OverlayButton& b : overlayButtons_)
+        if (b.action == a) return b.r;
+    return {};
+}
+
+// The buttons go above the frame if there's room, else below; on the page either
+// way, and not under the tools tab.
+void Editor::layoutOverlay() {
+    overlayButtons_.clear();
+    const IRect f = selectionFrame();
+    const std::vector<std::pair<Action, std::string>> specs = {
+        {Action::Delete, "DELETE"}, {Action::Duplicate, "DUPLICATE"}, {Action::Cancel, "DONE"}};
+    const int h = 96, gap = 12;
+    int total = -gap;
+    for (const auto& [a, label] : specs) total += Canvas::textWidth(label, kOverlayScale) + 48 + gap;
+    int y0 = f.y0 - 20 - h;
+    if (y0 < pageArea_.y0 + 10) y0 = std::min(f.y1 + kHandle + 20, pageArea_.y1 - 10 - h);
+    const IRect tab = panel_.tabRect();
+    const int minX = (y0 < tab.y1 && y0 + h > tab.y0 ? tab.x1 : pageArea_.x0) + 10;
+    const int x0 = std::clamp(f.x0, minX, std::max(minX, pageArea_.x1 - 10 - total));
+    int x = x0;
+    for (const auto& [a, label] : specs) {
+        const int w = Canvas::textWidth(label, kOverlayScale) + 48;
+        overlayButtons_.push_back({a, label, {x, y0, x + w, y0 + h}});
+        x += w + gap;
+    }
+}
+
+IRect Editor::overlayArea() const {
+    if (!sel_.active) return {};
+    IRect r = selectionFrame().united(selectionHandle());
+    for (const OverlayButton& b : overlayButtons_) r = r.united(b.r);
+    return r.grown(2);
+}
+
+// The selection's dashed frame, resize handle and buttons: black and white only, so
+// they can appear with DU.
+void Editor::drawOverlay(const IRect& clip) {
+    const IRect f = selectionFrame();
+    auto fill = [&](const IRect& r, uint8_t v) { canvas_.fill(r.intersected(clip), v); };
+    for (int x = f.x0; x < f.x1; x += 24) {
+        fill({x, f.y0, std::min(x + 14, f.x1), f.y0 + 3}, 0);
+        fill({x, f.y1 - 3, std::min(x + 14, f.x1), f.y1}, 0);
+    }
+    for (int y = f.y0; y < f.y1; y += 24) {
+        fill({f.x0, y, f.x0 + 3, std::min(y + 14, f.y1)}, 0);
+        fill({f.x1 - 3, y, f.x1, std::min(y + 14, f.y1)}, 0);
+    }
+    const IRect h = selectionHandle();
+    fill(h, 0);
+    fill(h.grown(-8), 255);
+    fill(h.grown(-14), 0);
+    for (const OverlayButton& b : overlayButtons_) {
+        fill(b.r, 0);
+        fill(b.r.grown(-3), 255);
+        const int tx = b.r.x0 + (b.r.width() - Canvas::textWidth(b.label, kOverlayScale)) / 2;
+        const int ty = b.r.y0 + (b.r.height() - 8 * kOverlayScale) / 2;
+        canvas_.drawText(tx, ty, b.label, kOverlayScale, 0, b.r.intersected(clip));
+    }
+}
+
+void Editor::startDrag(DragKind kind, const StrokePoint& p) {
+    gesture_ = Gesture::Drag;
+    dragKind_ = kind;
+    dragStart_ = p;
+    dragFrom_ = sel_.bounds;
+    dragDirty_ = {};
+    dragOriginals_.clear();
+    const auto& els = currentPage().layers[sel_.layer].elements;
+    for (size_t i : sel_.indices) dragOriginals_.push_back(std::get<Stroke>(els[i]));
+}
+
+// Moves the selected strokes in the document as the pen goes; the screen catches
+// up in dragFrame().
+void Editor::dragTo(const StrokePoint& p) {
+    const IRect before = overlayArea();
+    auto& els = currentPage().layers[sel_.layer].elements;
+    if (dragKind_ == DragKind::Move) {
+        const double dx = p.x - dragStart_.x, dy = p.y - dragStart_.y;
+        for (size_t k = 0; k < sel_.indices.size(); ++k) els[sel_.indices[k]] = movedStroke(dragOriginals_[k], dx, dy);
+    } else {
+        // Uniform scale about the top-left corner, following the pen along the diagonal.
+        const StrokePoint anchor{dragFrom_.x0, dragFrom_.y0};
+        const double vx = dragFrom_.x1 - anchor.x, vy = dragFrom_.y1 - anchor.y;
+        const double len2 = vx * vx + vy * vy;
+        const double factor =
+            len2 > 0 ? std::clamp(((p.x - anchor.x) * vx + (p.y - anchor.y) * vy) / len2, 0.1, 10.0) : 1.0;
+        for (size_t k = 0; k < sel_.indices.size(); ++k)
+            els[sel_.indices[k]] = scaledStroke(dragOriginals_[k], anchor, factor);
+    }
+    sel_.bounds = selectedBounds();
+    layoutOverlay();
+    dragDirty_ = dragDirty_.united(before).united(overlayArea());
+}
+
+void Editor::dragFrame(uint64_t now) {
+    if (dragDirty_.empty()) return;
+    previewArea(dragDirty_, now);  // black and white with DU, cleaned up once the pen rests
+    dragDirty_ = {};
+    lastDragFrame_ = now;
+}
+
+void Editor::finishDrag(uint64_t now) {
+    dragFrame(now);
+    const auto& els = currentPage().layers[sel_.layer].elements;
+    bool changed = false;
+    for (size_t k = 0; k < sel_.indices.size() && !changed; ++k) {
+        const Stroke& s = std::get<Stroke>(els[sel_.indices[k]]);
+        changed = s.width != dragOriginals_[k].width || s.points.front().x != dragOriginals_[k].points.front().x ||
+                  s.points.front().y != dragOriginals_[k].points.front().y;
+    }
+    if (changed) {
+        // Each stroke replaced by its moved or resized self, in place.
+        UndoAction a{UndoAction::Kind::Edit, page_, sel_.layer, {}, std::nullopt};
+        for (size_t k = 0; k < sel_.indices.size(); ++k) {
+            a.edits.push_back({false, sel_.indices[k], std::move(dragOriginals_[k])});
+            a.edits.push_back({true, sel_.indices[k], Stroke{}});
+        }
+        pushUndo(std::move(a));
+        markModified(now);
+    }
+    dragOriginals_.clear();
+}
+
+void Editor::deleteSelection(uint64_t now) {
+    const IRect area = overlayArea();
+    auto& els = currentPage().layers[sel_.layer].elements;
+    UndoAction a{UndoAction::Kind::Edit, page_, sel_.layer, {}, std::nullopt};
+    for (auto it = sel_.indices.rbegin(); it != sel_.indices.rend(); ++it) {
+        a.edits.push_back({false, *it, std::move(els[*it])});
+        els.erase(els.begin() + static_cast<std::ptrdiff_t>(*it));
+    }
+    sel_ = Selection{};
+    overlayButtons_.clear();
+    pushUndo(std::move(a));
+    markModified(now);
+    repaint(area, Refresh::Content);
+}
+
+void Editor::duplicateSelection(uint64_t now) {
+    const IRect before = overlayArea();
+    auto& els = currentPage().layers[sel_.layer].elements;
+    // The copy lands a little down and to the right, on top, and becomes the selection.
+    const double offset = std::max(8.0, 0.1 * std::max(sel_.bounds.x1 - sel_.bounds.x0, sel_.bounds.y1 - sel_.bounds.y0));
+    UndoAction a{UndoAction::Kind::Edit, page_, sel_.layer, {}, std::nullopt};
+    std::vector<size_t> copies;
+    for (size_t i : sel_.indices) {
+        els.push_back(movedStroke(std::get<Stroke>(els[i]), offset, offset));
+        a.edits.push_back({true, els.size() - 1, Stroke{}});
+        copies.push_back(els.size() - 1);
+    }
+    select(std::move(copies));
+    pushUndo(std::move(a));
+    markModified(now);
+    repaint(before.united(overlayArea()), Refresh::Content);
+}
+
 // ---- actions ----
 
 void Editor::perform(Action a, uint64_t now) {
+    // The tools panel's buttons (and their keyboard shortcuts).
+    const std::vector<IRect> panelBefore = panel_.rects();
     switch (a) {
+        case Action::None: return;  // between buttons
+        case Action::Tools:
+            panel_.setOpen(!panel_.open());
+            return refreshPanel(panelBefore);
         case Action::Pen:
-            if (tool_ == ToolKind::Pen) {
-                // Tapping the selected pen switches shape recognition on and off.
-                shapes_ = !shapes_;
-                setStatus(shapes_ ? "SHAPES" : "FREE", now);
-            }
-            tool_ = ToolKind::Pen;
-            break;
-        case Action::Highlighter: tool_ = ToolKind::Highlighter; break;
+        case Action::Highlighter:
         case Action::Eraser:
-            if (tool_ == ToolKind::Eraser) {
-                // Tapping the selected eraser switches between cutting strokes and removing them whole.
-                eraseWhole_ = !eraseWhole_;
-                setStatus(eraseWhole_ ? "WHOLE" : "PARTIAL", now);
+            clearSelection();
+            tool_ = a == Action::Pen ? ToolKind::Pen : a == Action::Highlighter ? ToolKind::Highlighter : ToolKind::Eraser;
+            // In the panel, the tool's options come up beside it; tapping it again puts the panel away.
+            if (panel_.open() && panel_.options() != a) panel_.showOptions(a);
+            else panel_.setOpen(false);
+            return refreshPanel(panelBefore);
+        case Action::Lasso:
+            tool_ = ToolKind::Lasso;
+            panel_.setOpen(false);
+            return refreshPanel(panelBefore);
+        case Action::Shapes:
+            clearSelection();
+            shapes_ = !shapes_;
+            tool_ = ToolKind::Pen;  // only the pen's strokes become shapes
+            panel_.setOpen(false);
+            setStatus(shapes_ ? "SHAPES" : "FREE", now);
+            return refreshPanel(panelBefore);
+        case Action::SizeFine:
+        case Action::SizeMedium:
+        case Action::SizeThick:
+            if (tool_ != ToolKind::Lasso) {
+                sizes_[static_cast<size_t>(tool_)] = a == Action::SizeFine     ? ToolSize::Fine
+                                                     : a == Action::SizeMedium ? ToolSize::Medium
+                                                                               : ToolSize::Thick;
             }
+            panel_.setOpen(false);
+            return refreshPanel(panelBefore);
+        case Action::ErasePartial:
+        case Action::EraseWhole:
+            clearSelection();
+            eraseWhole_ = a == Action::EraseWhole;
             tool_ = ToolKind::Eraser;
-            break;
-        case Action::SizeFine: size_ = ToolSize::Fine; break;
-        case Action::SizeMedium: size_ = ToolSize::Medium; break;
-        case Action::SizeThick: size_ = ToolSize::Thick; break;
-        case Action::Undo: undo(now); return;
-        case Action::Redo: redo(now); return;
+            panel_.setOpen(false);
+            setStatus(eraseWhole_ ? "WHOLE" : "PARTIAL", now);
+            return refreshPanel(panelBefore);
+        default: break;
+    }
+
+    closePanel();  // anything else puts the tools away first
+    switch (a) {
+        case Action::Delete:
+            if (sel_.active) deleteSelection(now);
+            return;
+        case Action::Duplicate:
+            if (sel_.active) duplicateSelection(now);
+            return;
+        case Action::Cancel: clearSelection(); return;
+        case Action::Undo:
+            clearSelection();
+            undo(now);
+            return;
+        case Action::Redo:
+            clearSelection();
+            redo(now);
+            return;
         case Action::PrevPage:
             if (page_ > 0) setPage(page_ - 1);
             return;
@@ -409,21 +792,30 @@ void Editor::perform(Action a, uint64_t now) {
                 setStatus("UNSAVED", now, 4000);
             }
             return;
-        case Action::None:
-        case Action::NewNotebook:
+        case Action::None:  // handled above
+        case Action::Tools:
+        case Action::Pen:
+        case Action::Shapes:
+        case Action::Lasso:
+        case Action::Highlighter:
+        case Action::Eraser:
+        case Action::SizeFine:
+        case Action::SizeMedium:
+        case Action::SizeThick:
+        case Action::ErasePartial:
+        case Action::EraseWhole:
+        case Action::NewNotebook:  // the library's
         case Action::Sort:
         case Action::Rename:
-        case Action::Duplicate:
-        case Action::Delete:
-        case Action::Confirm:
-        case Action::Cancel: return;  // not editor actions
+        case Action::Confirm: return;
     }
-    updateToolbar();
 }
 
 void Editor::setPage(size_t index) {
     page_ = index;
     chain_.valid = false;
+    sel_ = Selection{};
+    overlayButtons_.clear();
     xf_ = fitPage(currentPage(), pageArea_);
     settle_ = {};
     settleAt_ = 0;
@@ -528,7 +920,7 @@ RectF Editor::apply(UndoAction& a, bool forward) {
 }
 
 void Editor::undo(uint64_t now) {
-    if (undo_.empty() || gesture_ == Gesture::Draw || gesture_ == Gesture::Erase) return;
+    if (undo_.empty() || penBusy()) return;
     chain_.valid = false;
     UndoAction a = std::move(undo_.back());
     undo_.pop_back();
@@ -539,7 +931,7 @@ void Editor::undo(uint64_t now) {
 }
 
 void Editor::redo(uint64_t now) {
-    if (redo_.empty() || gesture_ == Gesture::Draw || gesture_ == Gesture::Erase) return;
+    if (redo_.empty() || penBusy()) return;
     chain_.valid = false;
     UndoAction a = std::move(redo_.back());
     redo_.pop_back();
@@ -564,8 +956,9 @@ void Editor::afterHistoryChange(size_t page, const RectF& changed, uint64_t now)
 // ---- deferred work ----
 
 void Editor::onIdle(uint64_t now) {
-    const bool penBusy = gesture_ == Gesture::Draw || gesture_ == Gesture::Erase;
-    if (settleAt_ && now >= settleAt_ && !penBusy) {
+    const bool busy = penBusy();
+    if (gesture_ == Gesture::Drag && !dragDirty_.empty() && now >= lastDragFrame_ + kDragFrameMs) dragFrame(now);
+    if (settleAt_ && now >= settleAt_ && !busy) {
         // Repaint from the document (replacing the live-ink approximations) and refresh
         // with the grayscale waveform, so antialiasing and highlighters show properly.
         repaint(settle_, Refresh::Content);
@@ -577,7 +970,7 @@ void Editor::onIdle(uint64_t now) {
         statusUntil_ = 0;
         updateToolbar();
     }
-    if (modified_ && !penBusy && !settleAt_ && now >= modifiedSince_ + opts_.autosaveDelayMs) {
+    if (modified_ && !busy && !settleAt_ && now >= modifiedSince_ + opts_.autosaveDelayMs) {
         if (!save(now, true)) modifiedSince_ = now;  // retry later rather than on every wakeup
     }
 }
@@ -585,14 +978,15 @@ void Editor::onIdle(uint64_t now) {
 int Editor::msUntilIdleWork(uint64_t now) const {
     // Only deadlines onIdle() can act on right now; anything else would spin.
     // While the pen is down, its own events keep waking us up.
-    const bool penBusy = gesture_ == Gesture::Draw || gesture_ == Gesture::Erase;
+    const bool busy = penBusy();
     uint64_t next = 0;
     auto consider = [&](uint64_t t) {
         if (t && (!next || t < next)) next = t;
     };
-    if (!penBusy) consider(settleAt_);
+    if (gesture_ == Gesture::Drag && !dragDirty_.empty()) consider(lastDragFrame_ + kDragFrameMs);
+    if (!busy) consider(settleAt_);
     consider(statusUntil_);
-    if (modified_ && !penBusy && !settleAt_) consider(std::max<uint64_t>(modifiedSince_ + opts_.autosaveDelayMs, 1));
+    if (modified_ && !busy && !settleAt_) consider(std::max<uint64_t>(modifiedSince_ + opts_.autosaveDelayMs, 1));
     if (!next) return -1;
     return next <= now ? 0 : static_cast<int>(std::min<uint64_t>(next - now, 1u << 30));
 }

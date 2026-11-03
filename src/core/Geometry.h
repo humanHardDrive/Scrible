@@ -13,6 +13,7 @@ struct IRect {
     int width() const { return x1 - x0; }
     int height() const { return y1 - y0; }
     bool contains(int x, int y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
+    bool contains(const IRect& o) const { return o.x0 >= x0 && o.x1 <= x1 && o.y0 >= y0 && o.y1 <= y1; }
 
     IRect united(const IRect& o) const {
         if (empty()) return o;

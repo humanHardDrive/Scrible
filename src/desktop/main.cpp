@@ -9,7 +9,8 @@
 // .xopp/.xoj file opens just that notebook.
 // Mouse: left = pen, right = eraser. A drawing tablet gets real pressure.
 // Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, Cmd/Ctrl+S save,
-//       P/H/E pen/highlighter/eraser, 1/2/3 sizes, Left/Right pages,
+//       P/H/E/L pen/highlighter/eraser/lasso, 1/2/3 sizes, Delete removes the selection,
+//       Left/Right pages,
 //       N new notebook (in the list), Esc back/quit.
 
 #include <SDL3/SDL.h>
@@ -207,6 +208,10 @@ int main(int argc, char** argv) {
                         case SDLK_P: a = scrible::Action::Pen; break;
                         case SDLK_H: a = scrible::Action::Highlighter; break;
                         case SDLK_E: a = scrible::Action::Eraser; break;
+                        case SDLK_L: a = scrible::Action::Lasso; break;
+                        case SDLK_R: a = scrible::Action::Shapes; break;
+                        case SDLK_DELETE:
+                        case SDLK_BACKSPACE: a = scrible::Action::Delete; break;
                         case SDLK_1: a = scrible::Action::SizeFine; break;
                         case SDLK_2: a = scrible::Action::SizeMedium; break;
                         case SDLK_3: a = scrible::Action::SizeThick; break;
