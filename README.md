@@ -10,7 +10,7 @@ the app controls the panel's fast refresh modes directly. So this is a small C++
 that draws straight to the e-ink framebuffer (via [FBInk](https://github.com/NiLuJe/FBInk))
 and reads the pen from evdev, sharing Xournal++'s file format.
 
-## Status: v0.2 in progress
+## Features (1.0)
 
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
@@ -20,9 +20,10 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 - Shape recognition, as in Xournal: lines, triangles, quadrilaterals, rectangles,
   circles and ellipses, plus polygons drawn as separate sides and arrows (a line, then
   a "V" at its end)
-- Pen with pressure, highlighter, and an eraser (also the pen's eraser end) that either
-  cuts away just the ink it passes over, like Xournal++'s standard eraser, or removes
-  whole strokes
+- Pen with pressure, highlighter (also the pen's side button), and an eraser (also the
+  pen's eraser end) that either cuts away just the ink it passes over, like Xournal++'s
+  standard eraser, or removes whole strokes
+- Drawing tools tucked into a panel at the edge of the page, out of the way until tapped
 - Three sizes per tool, undo/redo, multiple pages (`>` on the last page adds one;
   PAGE deletes one)
 - Opens `.xopp` and `.xoj` files from Xournal++ and the original Xournal. Anything it
