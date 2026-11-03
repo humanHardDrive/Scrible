@@ -142,7 +142,10 @@ void App::onIdle(uint64_t now) {
         deferred_ = nullptr;
         work();
     }
-    if (editor_) editor_->onIdle(now);
+    if (editor_) {
+        editor_->onIdle(now);
+        afterEditorInput();  // BACK and EXIT finish here
+    }
 }
 
 int App::msUntilIdleWork(uint64_t now) const {

@@ -91,6 +91,7 @@ ToolbarState Editor::toolbarState() const {
     if (undo_.empty() && !paperChanged) s.disabled.push_back(Action::Undo);
     if (redo_.empty() || paperChanged) s.disabled.push_back(Action::Redo);
     if (paperMenu_.open()) s.active.push_back(Action::PageStyle);
+    if (pendingExit_ != Action::None) s.active.push_back(pendingExit_);
     if (bg.type != "solid" && doc_.pages.size() < 2) s.disabled.push_back(Action::PageStyle);  // nothing to offer
     s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"}};
     s.text = !status_.empty() ? status_ : std::to_string(page_ + 1) + "/" + std::to_string(doc_.pages.size());
@@ -904,14 +905,10 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::Save: save(now); return;
         case Action::Exit:
         case Action::Quit:
-            if (!modified_ || now < exitArmedUntil_ || save(now)) {
-                close_ = true;
-                quit_ = a == Action::Quit;
-            } else {
-                // Save failed: a second tap within a few seconds leaves without saving.
-                exitArmedUntil_ = now + 4000;
-                setStatus("UNSAVED", now, 4000);
-            }
+            // Saving, and leaving the app, take a moment: show the button pressed first.
+            pendingExit_ = a;
+            pendingExitShown_ = false;
+            updateToolbar();
             return;
         case Action::None:  // handled above
         case Action::PageStyle:
@@ -939,6 +936,19 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::Sort:
         case Action::Rename:
         case Action::Confirm: return;
+    }
+}
+
+void Editor::finishExit(uint64_t now) {
+    const Action a = pendingExit_;
+    pendingExit_ = Action::None;
+    if (!modified_ || now < exitArmedUntil_ || save(now)) {
+        close_ = true;
+        quit_ = a == Action::Quit;
+    } else {
+        // Save failed: a second tap within a few seconds leaves without saving.
+        exitArmedUntil_ = now + 4000;
+        setStatus("UNSAVED", now, 4000);
     }
 }
 
@@ -1095,6 +1105,11 @@ void Editor::afterHistoryChange(size_t page, const RectF& changed, uint64_t now)
 // ---- deferred work ----
 
 void Editor::onIdle(uint64_t now) {
+    if (pendingExit_ != Action::None) {
+        // The first pass only lets the pressed button reach the screen.
+        if (!pendingExitShown_) pendingExitShown_ = true;
+        else return finishExit(now);
+    }
     const bool busy = penBusy();
     if (gesture_ == Gesture::Drag && !dragDirty_.empty() && now >= lastDragFrame_ + kDragFrameMs) dragFrame(now);
     if (settleAt_ && now >= settleAt_ && !busy) {
@@ -1117,6 +1132,7 @@ void Editor::onIdle(uint64_t now) {
 int Editor::msUntilIdleWork(uint64_t now) const {
     // Only deadlines onIdle() can act on right now; anything else would spin.
     // While the pen is down, its own events keep waking us up.
+    if (pendingExit_ != Action::None) return 0;
     const bool busy = penBusy();
     uint64_t next = 0;
     auto consider = [&](uint64_t t) {

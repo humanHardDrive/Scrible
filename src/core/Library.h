@@ -123,6 +123,7 @@ private:
     Mode mode_ = Mode::List;
     PromptFor promptFor_ = PromptFor::New;
     size_t target_ = 0;  // the notebook a menu, confirmation or rename is about
+    bool exiting_ = false;  // EXIT was tapped: shown pressed while the app leaves
     IRect dialog_;
     std::vector<DialogButton> dialogButtons_;
     std::vector<Damage> damage_;

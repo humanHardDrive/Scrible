@@ -360,6 +360,7 @@ void Library::drawList() {
     if (page_ + 1 >= pageCount()) s.disabled.push_back(Action::NextPage);
     s.labels = {{Action::Sort, order_ == NotebookOrder::Name ? "A-Z" : "NEWEST"}};
     if (mode_ == Mode::About) s.active.push_back(Action::About);
+    if (exiting_) s.active.push_back(Action::Exit);
     s.text = std::to_string(page_ + 1) + "/" + std::to_string(pageCount());
     toolbar_.draw(canvas_, s);
 
@@ -579,7 +580,12 @@ Library::Intent Library::perform(Action a) {
             mode_ = Mode::About;
             redrawAll(Refresh::UI);  // black and white, like the menus
             return {};
-        case Action::Exit: return {Intent::Kind::Exit, {}};
+        case Action::Exit:
+            // Leaving takes a moment while the Kindle's own UI comes back: show the button pressed.
+            exiting_ = true;
+            drawList();
+            damage_.push_back({toolbar_.rect(), Refresh::UI});
+            return {Intent::Kind::Exit, {}};
         case Action::Sort:
             order_ = order_ == NotebookOrder::Newest ? NotebookOrder::Name : NotebookOrder::Newest;
             if (settings_) settings_->set("sort", order_ == NotebookOrder::Name ? "name" : "newest");

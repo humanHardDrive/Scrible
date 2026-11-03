@@ -85,7 +85,8 @@ public:
     IRect selectionHandle() const;
     IRect selectionButton(Action a) const;
     // BACK or EXIT was tapped and the notebook is saved (or the user chose to leave
-    // it unsaved). quitRequested() tells EXIT (leave the app) from BACK.
+    // it unsaved). quitRequested() tells EXIT (leave the app) from BACK. The tapped
+    // button is shown pressed first; saving and closing follow on the next idle pass.
     bool closeRequested() const { return close_; }
     bool quitRequested() const { return close_ && quit_; }
 
@@ -179,6 +180,7 @@ private:
     void changePaper(Action a, uint64_t now);
     void closePaperMenu();
     void deletePage(uint64_t now);
+    void finishExit(uint64_t now);
     void updateToolbar();
     void markModified(uint64_t now);
     void setStatus(const std::string& text, uint64_t now, uint64_t durationMs = 1500);
@@ -247,6 +249,8 @@ private:
     std::string status_;
     uint64_t statusUntil_ = 0;
     uint64_t exitArmedUntil_ = 0;
+    Action pendingExit_ = Action::None;  // BACK or EXIT, shown pressed, done on the next idle pass
+    bool pendingExitShown_ = false;
     bool close_ = false;
     bool quit_ = false;
 

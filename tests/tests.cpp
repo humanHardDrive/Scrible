@@ -594,6 +594,9 @@ TEST(editor_saves_on_exit) {
         uint64_t t = 0;
         drawLine(e, 100, 300, 400, t);
         e.perform(Action::Exit, t += 10);
+        CHECK(!e.closeRequested() && e.modified());  // first the button shows it was pressed...
+        e.onIdle(t);
+        e.onIdle(t += 10);  // ...then it saves and closes
         CHECK(e.closeRequested());
         CHECK(!e.modified());
     }
@@ -608,10 +611,12 @@ TEST(editor_exit_after_failed_save_needs_second_tap) {
     Editor e(900, 1200, Document{}, "/nonexistent-dir/notes.xopp");
     uint64_t t = 0;
     drawLine(e, 100, 300, 400, t);
-    e.perform(Action::Exit, 1000);
-    CHECK(!e.closeRequested());
-    e.perform(Action::Exit, 2000);
-    CHECK(e.closeRequested());
+    for (uint64_t now : {1000, 2000}) {
+        e.perform(Action::Exit, now);
+        e.onIdle(now);
+        e.onIdle(now + 10);
+        CHECK(e.closeRequested() == (now == 2000));
+    }
 }
 
 TEST(editor_autosaves_when_idle) {
@@ -766,6 +771,12 @@ void tapButton(App& app, const Toolbar& tb, Action a, uint64_t& t) {
     app.touchDown(c.x0, c.y0, t += 10);
 }
 
+// What a front end's main loop does between input events (and BACK and EXIT wait for).
+void idle(App& app, uint64_t& t) {
+    app.onIdle(t += 10);
+    app.onIdle(t += 10);
+}
+
 void tapAt(App& app, const IRect& r, uint64_t& t) {
     const IRect c = center(r);
     app.touchDown(c.x0, c.y0, t += 10);
@@ -850,6 +861,7 @@ TEST(app_opens_notebooks_from_the_list_and_returns) {
     // Write, then BACK: saved, and back on the list.
     writeIn(app, t);
     tapButton(app, app.editor()->toolbar(), Action::Exit, t);
+    idle(app, t);
     CHECK(!app.editor() && !app.quitRequested());
     Document saved;
     CHECK(loadXopp(dir + "/first.xopp", saved, err));
@@ -863,6 +875,7 @@ TEST(app_opens_notebooks_from_the_list_and_returns) {
         tapButton(app, app.library()->prompt().toolbar(), Action::Confirm, t);
         CHECK(app.editor() && app.editor()->path().compare(0, dir.size(), dir) == 0);
         app.perform(Action::Exit, t += 10);  // BACK without writing (keyboard shortcut path)
+        idle(app, t);
         CHECK(app.library()->notebooks().size() == expected);
     }
 
@@ -873,6 +886,7 @@ TEST(app_opens_notebooks_from_the_list_and_returns) {
     CHECK(app.editor() && app.editor()->path() == dir + "/Physics 2.xopp");
     writeIn(app, t);
     app.perform(Action::Exit, t += 10);
+    idle(app, t);
     CHECK(app.library()->notebooks().size() == 4);
 
     tapButton(app, app.library()->toolbar(), Action::Exit, t);
@@ -905,6 +919,7 @@ TEST(app_single_notebook_mode) {
     uint64_t t = 0;
     writeIn(app, t);
     app.perform(Action::Exit, t += 10);
+    idle(app, t);
     CHECK(app.quitRequested());
     CHECK(access(o.file.c_str(), F_OK) == 0);
     std::remove(o.file.c_str());
@@ -1188,6 +1203,7 @@ TEST(app_exit_from_a_notebook_and_remembered_eraser) {
             tapTool(app, a, t);
         CHECK(app.editor()->eraseWholeStrokes() && app.editor()->toolSize(ToolKind::Pen) == ToolSize::Thick);
         tapButton(app, app.editor()->toolbar(), Action::Exit, t);
+        idle(app, t);
         open(app, "Two");
         if (!app.editor()) return removeDir(dir);
         CHECK(app.editor()->eraseWholeStrokes() && app.editor()->toolSize(ToolKind::Pen) == ToolSize::Thick);
@@ -1196,6 +1212,7 @@ TEST(app_exit_from_a_notebook_and_remembered_eraser) {
         for (Action a : {Action::Tools, Action::Pen, Action::Pen}) tapTool(app, a, t);  // again: puts the panel away
         writeIn(app, t);
         tapButton(app, app.editor()->toolbar(), Action::Quit, t);
+        idle(app, t);
         CHECK(app.quitRequested());
         Document saved;
         CHECK(loadXopp(dir + "/Two.xopp", saved, err) && saved.pages[0].layers.back().elements.size() == 2);
@@ -2003,6 +2020,51 @@ TEST(pen_side_button_highlights_with_any_tool) {
     e.penMove({600, 700, 0.5, true, false}, t += 10);
     e.penUp(t += 10);
     CHECK(els.size() == 3);
+}
+
+TEST(exit_buttons_show_they_were_pressed) {
+    const std::string dir = tempDir("pressed-exit");
+    std::string err;
+    CHECK(saveXopp(dir + "/One.xopp", oneStrokeDocument(), err));
+    AppOptions o;
+    o.notebooksDir = dir;
+    uint64_t t = 0;
+    App app(1860, 2480, o);
+    app.takeDamage();
+    auto pressed = [&](const Toolbar& tb, Action a) {
+        const IRect r = tb.buttonRect(a);
+        return app.canvas().at(r.x0 + 6, r.y0 + 6) == 0;  // inverted: black inside
+    };
+    tapAt(app, app.library()->rowRect(0), t);
+    idle(app, t);
+    if (!app.editor()) return removeDir(dir);
+    for (Action a : {Action::Exit, Action::Quit}) {  // BACK, then EXIT
+        if (a == Action::Quit) {
+            tapAt(app, app.library()->rowRect(0), t);
+            idle(app, t);
+        }
+        writeIn(app, t);
+        CHECK(!pressed(app.editor()->toolbar(), a));
+        app.takeDamage();  // what opening and writing drew
+        tapButton(app, app.editor()->toolbar(), a, t);
+        // Before saving or leaving, the pressed button goes to the screen, quickly.
+        CHECK(app.editor() && app.editor()->modified() && pressed(app.editor()->toolbar(), a));
+        const auto dmg = app.takeDamage();
+        CHECK(!dmg.empty() && hasMode(dmg, Refresh::UI));
+        app.onIdle(t += 10);  // the pass that presents it
+        CHECK(app.editor() != nullptr);
+        app.onIdle(t += 10);
+        CHECK(!app.editor() || app.quitRequested());
+        CHECK(app.quitRequested() == (a == Action::Quit));
+    }
+    // The notebook list's EXIT too.
+    App again(1860, 2480, o);
+    again.takeDamage();
+    tapButton(again, again.library()->toolbar(), Action::Exit, t);
+    CHECK(again.quitRequested());
+    const IRect r = again.library()->toolbar().buttonRect(Action::Exit);
+    CHECK(again.canvas().at(r.x0 + 6, r.y0 + 6) == 0 && hasMode(again.takeDamage(), Refresh::UI));
+    removeDir(dir);
 }
 
 // ---- about ----
