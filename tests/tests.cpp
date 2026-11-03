@@ -2838,6 +2838,64 @@ TEST(keyboard_keys_and_list_buttons_show_they_were_pressed) {
     removeDir(dir);
 }
 
+TEST(editor_shows_the_notebook_name) {
+    EditorOptions o;
+    o.fromList = true;
+    for (int w : {1072, 1236, 1860, 1986}) {  // Kindle screen widths
+        for (const char* name : {"Physics", "A very long notebook name that goes on and on and on"}) {
+            Editor e(w, 2400, Document{}, tempPath(std::string(name) + ".xopp"), o);
+            const IRect t = e.toolbar().titleRect();
+            CHECK(t.width() >= 8 * 16 && t.x1 <= e.toolbar().buttonRect(Action::PageStyle).x0);
+            // Written there (and nowhere it shouldn't be: drawing is clipped to the slot).
+            int ink = 0;
+            for (int y = t.y0; y < t.y1; ++y)
+                for (int x = t.x0; x < t.x1; ++x) ink += e.canvas().at(x, y) == 0;
+            CHECK(ink > 0);
+        }
+    }
+}
+
+TEST(tapping_the_name_shows_it_whole) {
+    EditorOptions o;
+    o.fromList = true;
+    const std::string name =
+        "Notes from the long lecture on thermodynamics, week three, with the worked examples from the board";
+    Editor e(1860, 2400, Document{}, tempPath(name + ".xopp"), o);
+    uint64_t t = 0;
+    drawLine(e, 400, 900, 800, t);
+    const IRect title = e.toolbar().titleRect(), undo = e.toolbar().buttonRect(Action::Undo);
+    auto inkIn = [&](const IRect& r) {
+        int n = 0;
+        for (int y = r.y0; y < r.y1; ++y)
+            for (int x = r.x0; x < r.x1; ++x) n += e.canvas().at(x, y) == 0;
+        return n;
+    };
+    const int before = inkIn({title.x1, title.y0, e.toolbar().rect().x1, title.y1});
+    auto tap = [&](const IRect& r) {
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+    };
+    // Tap the name: it takes the whole bar, on two lines (bands of rows with ink, with
+    // empty rows between), and the buttons go.
+    tap(title);
+    const IRect bar = e.toolbar().rect();
+    int bands = 0;
+    bool inBand = false;
+    for (int y = bar.y0; y < bar.y1 - 3; ++y) {
+        const bool ink = inkIn({bar.x0, y, bar.x1, y + 1}) > 0;
+        if (ink && !inBand) ++bands;
+        inBand = ink;
+    }
+    CHECK(bands == 2);
+    CHECK(inkIn({title.x1, title.y0, bar.x1, title.y1}) != before);
+    // A tap on the bar, even where UNDO was, brings the buttons back without undoing.
+    tap(undo);
+    CHECK(e.document().pages[0].layers.back().elements.size() == 1);
+    CHECK(inkIn({title.x1, title.y0, bar.x1, title.y1}) == before);
+    tap(undo);  // and now it's UNDO again
+    CHECK(e.document().pages[0].layers.back().elements.empty());
+}
+
 int main() {
     for (const auto& [name, fn] : registry()) {
         const int before = g_failures;

@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
-project(Scrible VERSION 1.0.0 LANGUAGES C CXX)
+project(Scrible VERSION 1.1.0 LANGUAGES C CXX)
+# What comes after the number for a build that isn't a release yet ("dev"); empty for
+# a release. The app reports "1.1.0-dev", and the Kindle packages are named that way.
+set(SCRIBLE_PRERELEASE "dev")
+set(SCRIBLE_VERSION_STRING "${PROJECT_VERSION}")
+if(SCRIBLE_PRERELEASE)
+  string(APPEND SCRIBLE_VERSION_STRING "-${SCRIBLE_PRERELEASE}")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,7 +69,7 @@ add_library(scrible_core STATIC
   src/core/Widgets.cpp
   src/core/XoppFile.cpp)
 target_include_directories(scrible_core PUBLIC src/core)
-target_compile_definitions(scrible_core PRIVATE SCRIBLE_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(scrible_core PRIVATE SCRIBLE_VERSION="${SCRIBLE_VERSION_STRING}")
 # The commit being built, for the About dialog; checked on every build.
 set(SCRIBLE_BUILD_INFO "${CMAKE_BINARY_DIR}/generated/BuildInfo.h")
 add_custom_target(scrible_build_info

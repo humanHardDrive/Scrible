@@ -56,8 +56,10 @@ cmake -S "$ROOT" -B "$WORK/build" \
 cmake --build "$WORK/build" -j"$JOBS"
 
 # ---- Packaging ----
-VERSION="$(sed -n 's/^project(Scrible VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")"
-IFS=. read -r V_MAJOR V_MINOR V_PATCH <<<"$VERSION"
+NUMBER="$(sed -n 's/^project(Scrible VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")"
+IFS=. read -r V_MAJOR V_MINOR V_PATCH <<<"$NUMBER"  # KPM's manifest takes just the numbers
+PRERELEASE="$(sed -n 's/^set(SCRIBLE_PRERELEASE "\([^"]*\)").*/\1/p' "$ROOT/CMakeLists.txt")"
+VERSION="$NUMBER${PRERELEASE:+-$PRERELEASE}"
 ICON="data:image/png;base64,$(base64 <"$ROOT/kindle/cover.png" | tr -d '\n')"
 
 # dist/kindle-root/ mirrors the Kindle's storage (/mnt/us): copy its contents over USB.

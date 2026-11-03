@@ -208,6 +208,7 @@ private:
     void repaint(const IRect& r, Refresh mode);
     void drawChrome(const IRect& clip);
     ToolbarState toolbarState() const;
+    Action toolbarHit(int x, int y) const;
     ToolPanelState panelState() const;
     void refreshPanel(const std::vector<IRect>& before);
     void closePanel();
@@ -332,6 +333,7 @@ private:
     uint64_t statusUntil_ = 0;
     // A button showing it was pressed: a toolbar one by its action, any other by its
     // place on the screen (inverted there, and drawn again afterwards).
+    bool titleOnly_ = false;  // the toolbar shows the notebook's whole name instead of its buttons
     Action flashAction_ = Action::None;
     IRect flashRect_;
     uint64_t flashUntil_ = 0;

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "Eraser.h"
 #include "Lasso.h"
@@ -39,10 +40,12 @@ constexpr double kPenWidths[] = {0.85, 1.41, 2.26};
 constexpr double kHighlighterWidths[] = {2.83, 8.50, 19.84};
 constexpr double kEraserWidths[] = {2.83, 8.50, 19.84};
 
-// The drawing tools are in the panel along the left edge (ToolPanel).
+// The drawing tools are in the panel along the left edge (ToolPanel). The notebook's
+// name fills the room between UNDO / REDO and the page controls.
 ToolbarGroups editorToolbar(bool fromList) {
     ToolbarGroups g = {
         {{Action::Undo, "UNDO"}, {Action::Redo, "REDO"}},
+        {{Action::None, ""}},
         {{Action::PageStyle, "PAGE"}, {Action::PrevPage, "<"}, {Action::None, "000/000"}, {Action::NextPage, ">"}},
         {{Action::Save, "SAVE*"}},
     };
@@ -126,9 +129,19 @@ ToolbarState Editor::toolbarState() const {
     if (bg.type != "solid" && doc_.pages.size() < 2) s.disabled.push_back(Action::PageStyle);  // nothing to offer
     s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"}};
     s.text = !status_.empty() ? status_ : std::to_string(page_ + 1) + "/" + std::to_string(doc_.pages.size());
+    // The notebook's name: the file's, without the folder or the extension.
+    std::string name = path_.substr(path_.rfind('/') == std::string::npos ? 0 : path_.rfind('/') + 1);
+    for (const char* ext : {".xopp", ".xoj"})
+        if (name.size() > std::strlen(ext) && name.compare(name.size() - std::strlen(ext), std::string::npos, ext) == 0)
+            name.resize(name.size() - std::strlen(ext));
+    s.title = name;
+    s.titleOnly = titleOnly_;
     s.disabled.erase(std::remove(s.disabled.begin(), s.disabled.end(), flashAction_), s.disabled.end());
     return s;
 }
+
+// While the whole name shows, any tap on the bar goes back to the buttons.
+Action Editor::toolbarHit(int x, int y) const { return titleOnly_ ? Action::Title : toolbar_.hit(x, y); }
 
 void Editor::press(Action a, uint64_t now) {
     if (a == Action::None) return;
@@ -406,7 +419,7 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
     const int x = static_cast<int>(s.x), y = static_cast<int>(s.y);
     if (toolbar_.rect().contains(x, y)) {
         gesture_ = Gesture::Toolbar;
-        press(toolbar_.hit(x, y), now);
+        press(toolbarHit(x, y), now);
         return;
     }
     if (panel_.covers(x, y) || paperMenu_.covers(x, y)) {
@@ -573,7 +586,7 @@ void Editor::touchDown(int x, int y, uint64_t now) {
 void Editor::touchDown(int id, int x, int y, uint64_t now) {
     if (gesture_ != Gesture::None) return;  // the pen is busy; this is a palm
     if (fingers_.empty() && viewGesture_ == ViewGesture::None) {  // buttons answer the first finger only
-        if (toolbar_.rect().contains(x, y)) return press(toolbar_.hit(x, y), now);
+        if (toolbar_.rect().contains(x, y)) return press(toolbarHit(x, y), now);
         if (panel_.covers(x, y)) return press(panel_.hit(x, y), now);
         if (paperMenu_.covers(x, y)) return press(paperMenu_.hit(x, y), now);
         if (math_.open()) return math_.covers(x, y) ? mathTap(x, y, now) : closeMath();
@@ -1513,6 +1526,10 @@ void Editor::perform(Action a, uint64_t now) {
             else addPage(now);
             return;
         case Action::Save: save(now); return;
+        case Action::Title:
+            titleOnly_ = !titleOnly_;
+            updateToolbar();
+            return;
         case Action::Exit:
         case Action::Quit:
             // Saving, and leaving the app, take a moment: show the button pressed first.

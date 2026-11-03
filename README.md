@@ -10,7 +10,7 @@ the app controls the panel's fast refresh modes directly. So this is a small C++
 that draws straight to the e-ink framebuffer (via [FBInk](https://github.com/NiLuJe/FBInk))
 and reads the pen from evdev, sharing Xournal++'s file format.
 
-## Features (1.0)
+## Features (1.1, in development)
 
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
@@ -116,8 +116,9 @@ In the list:
 - ABOUT shows the version and exactly which build this is (the git commit it was built
   from, or the release tag), the device, and the license.
 
-In a notebook the toolbar along the top has UNDO / REDO, PAGE, `<` page `>`, SAVE,
-BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
+In a notebook the toolbar along the top has UNDO / REDO, the notebook's name
+(shortened to fit; tap it to see it whole across the bar, and tap the bar to go back),
+PAGE, `<` page `>`, SAVE, BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
 page. Tap it to open a column of PEN, SHAPE, SELECT, MARK (highlighter), ERASE and PAN,
 then zoom buttons. PEN, MARK and ERASE show their sizes beside the column, and each
 keeps its own. Picking one
