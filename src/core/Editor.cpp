@@ -17,6 +17,7 @@ constexpr double kMinPointDistPx = 0.75;  // closer samples are dropped
 constexpr size_t kMaxUndo = 1000;
 constexpr uint64_t kDragFrameMs = 50;  // at most this often while moving a selection (e-ink can't keep up)
 constexpr int kFramePad = 14, kHandle = 24, kOverlayScale = 3;
+constexpr int kInfoGap = 8, kInfoSize = 44;  // a math answer's i: this far right of it, this big
 
 // Preset widths (points) of the original Xournal, indexed by ToolSize.
 constexpr double kPenWidths[] = {0.85, 1.41, 2.26};
@@ -850,7 +851,7 @@ IRect Editor::answerRect(size_t i) const { return xf_.toScreen(answerAt(i).bound
 // A small box with an i, at the answer's top right.
 IRect Editor::answerInfoButton(size_t i) const {
     const IRect r = answerRect(i);
-    return {r.x1 + 8, r.y0, r.x1 + 8 + 44, r.y0 + 44};
+    return {r.x1 + kInfoGap, r.y0, r.x1 + kInfoGap + kInfoSize, r.y0 + kInfoSize};
 }
 
 IRect Editor::answerArea(size_t i) const { return answerRect(i).united(answerInfoButton(i)).grown(2); }
@@ -1347,6 +1348,11 @@ RectF Editor::apply(UndoAction& a, bool forward) {
         if (!b.valid) return;
         changed.add(b.x0, b.y0);
         changed.add(b.x1, b.y1);
+        // A math answer's i, beside it, comes and goes with it.
+        if (const auto* f = std::get_if<ForeignElement>(&e); f && !f->mathOp.empty()) {
+            const double reach = (kInfoGap + kInfoSize + 4) / xf_.scale;
+            changed.add(b.x1 + reach, b.y0 + reach);
+        }
     };
     auto take = [](std::vector<Element>& els, size_t i) {
         Element e = std::move(els[i]);
