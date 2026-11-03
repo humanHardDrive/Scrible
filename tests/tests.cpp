@@ -2142,7 +2142,7 @@ TEST(pinch_zooms_about_the_fingers) {
         e.touchMove(1, 1100 + 20 * step, 1300, t += 50);
         e.onIdle(t);
         flush();
-        for (const Damage& d : last) CHECK(d.mode == Refresh::Ink);  // quick black-and-white previews
+        for (const Damage& d : last) CHECK(d.mode == Refresh::Preview);  // quick black-and-white previews
     }
     CHECK_NEAR(e.zoom(), 2, 1e-6);
     CHECK_NEAR(e.view().toScreenX(under.x), 900, 1);  // what was between the fingers still is
@@ -2175,6 +2175,72 @@ TEST(pinch_zooms_about_the_fingers) {
     CHECK(e.document().pages[0].layers.back().elements.size() == 1);  // fingers never draw
 }
 
+TEST(a_hand_landing_on_the_page_doesnt_zoom) {
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, Document{}, tempPath("palm.xopp"), o);
+    EinkPanel panel(1860, 2480);
+    auto flush = [&] {
+        const auto d = e.takeDamage();
+        for (const Damage& x : d) panel.refresh(e.canvas(), x);
+        return d;
+    };
+    uint64_t t = 1000;
+    flush();
+    // Two contacts that settle a little (less than the slop): nothing on screen at all.
+    e.touchDown(0, 900, 1800, t += 10);
+    e.touchDown(1, 1100, 1900, t += 10);
+    for (int i = 1; i <= 5; ++i) {
+        e.touchMove(0, 900 + 4 * i, 1800 + 3 * i, t += 50);
+        e.touchMove(1, 1100 - 5 * i, 1900 + 2 * i, t += 50);
+        e.onIdle(t);
+    }
+    CHECK(e.zoom() == 1 && flush().empty());
+    // ...then the pen comes near: it was a palm. Moving now does nothing.
+    e.setPenNear(true);
+    e.touchMove(1, 1500, 2100, t += 100);
+    e.onIdle(t += 200);
+    CHECK(e.zoom() == 1 && flush().empty());
+    e.setPenNear(false);
+    e.touchMove(1, 1600, 2200, t += 100);  // still the same hand, until it lifts
+    e.onIdle(t += 200);
+    CHECK(e.zoom() == 1);
+    e.touchUp(0, t += 10);
+    e.touchUp(1, t += 10);
+
+    // A pinch already under way when the pen comes near is undone.
+    e.touchDown(0, 700, 1300, t += 10);
+    e.touchDown(1, 1100, 1300, t += 10);
+    e.touchMove(1, 1400, 1300, t += 200);
+    e.onIdle(t += 200);
+    CHECK(e.zoom() > 1);
+    flush();
+    e.setPenNear(true);
+    CHECK(e.zoom() == 1 && hasMode(flush(), Refresh::Full));
+    e.setPenNear(false);
+    e.touchUp(0, t += 10);
+    e.touchUp(1, t += 10);
+
+    // Three contacts are a palm too.
+    e.touchDown(0, 700, 1300, t += 10);
+    e.touchDown(1, 1100, 1300, t += 10);
+    e.touchDown(2, 900, 1500, t += 10);
+    e.touchMove(1, 1500, 1300, t += 200);
+    e.onIdle(t += 200);
+    CHECK(e.zoom() == 1);
+    for (int id : {0, 1, 2}) e.touchUp(id, t += 10);
+
+    // And a real pinch still works afterwards.
+    e.touchDown(0, 700, 1300, t += 10);
+    e.touchDown(1, 1100, 1300, t += 10);
+    e.touchMove(1, 1500, 1300, t += 200);
+    e.touchUp(0, t += 10);
+    e.touchUp(1, t += 10);
+    CHECK(e.zoom() > 1.5);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+}
+
 TEST(pan_tool_moves_the_page_with_pen_or_finger) {
     Editor e(900, 1200, Document{}, tempPath("pan.xopp"));
     uint64_t t = 0;
@@ -2201,6 +2267,32 @@ TEST(pan_tool_moves_the_page_with_pen_or_finger) {
     e.touchUp(0, t += 10);
     CHECK_NEAR(e.view().offsetX, before.offsetX + 20, 1e-6);
     CHECK_NEAR(e.view().offsetY, before.offsetY + 10, 1e-6);
+}
+
+TEST(panning_shows_what_was_off_screen) {
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(900, 1200, Document{}, tempPath("pan-reveal.xopp"), o);
+    uint64_t t = 0;
+    drawLine(e, 650, 850, 1150, t);  // bottom right
+    const Stroke s = std::get<Stroke>(e.document().pages[0].layers.back().elements[0]);
+    const StrokePoint mid{(s.points.front().x + s.points.back().x) / 2, s.points.front().y};
+    e.perform(Action::ZoomIn, t += 10);
+    e.perform(Action::ZoomIn, t += 10);
+    e.panBy(100000, 100000, t += 10);  // to the top left: the stroke is off screen
+    CHECK(e.view().toScreenY(mid.y) > 1200);
+    e.perform(Action::Pan, t += 10);
+    e.takeDamage();
+    // Drag the page up and left until the stroke comes into view; the preview shows it.
+    e.penDown({850, 1150, 0.5, false}, t += 10);
+    for (int i = 1; i <= 10; ++i) e.penMove({850.0 - 70 * i, 1150.0 - 110 * i, 0.5, false}, t += 100);
+    e.onIdle(t += 100);
+    const auto dmg = e.takeDamage();
+    CHECK(hasMode(dmg, Refresh::Preview));
+    const int x = static_cast<int>(e.view().toScreenX(mid.x)), y = static_cast<int>(e.view().toScreenY(mid.y));
+    CHECK(x > 0 && x < 900 && y > 120 && y < 1200);
+    if (x > 0 && x < 900 && y > 120 && y < 1200) CHECK(e.canvas().at(x, y) == 0);
+    e.penUp(t += 10);
 }
 
 TEST(tool_panel_has_pan_and_zoom_and_fits) {

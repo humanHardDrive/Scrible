@@ -144,7 +144,8 @@ rest on the page.
 - These choices and each tool's size are remembered.
 - Zooming: pinch with two fingers to zoom (up to 400%) and move the page, with the pen
   lifted away from the screen, since a hand holding the pen near the page is taken for
-  a resting palm. Or use the panel: `-` and `+` zoom in steps, FIT goes back to the
+  a resting palm. Fingers have to move a few millimetres before anything happens, so a
+  hand coming down on the page doesn't zoom; three or more contacts are a palm too. Or use the panel: `-` and `+` zoom in steps, FIT goes back to the
   whole page, and with PAN selected, dragging with the pen or a finger moves the page.
   While the page moves you see a quick black-and-white preview; when you let go it's
   redrawn properly, with a flash. Turning the page goes back to the whole page.

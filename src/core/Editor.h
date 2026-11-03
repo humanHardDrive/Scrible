@@ -28,6 +28,7 @@ namespace scrible {
 enum class Refresh {
     Ink,      // stroke being written: fastest black/white waveform (DU)
     UI,       // toolbar feedback, black/white only: fast (DU)
+    Preview,  // the whole page while zooming or panning, black/white: fast (DU, then A2), one at a time
     Content,  // any change, accurate grays; only changed pixels flicker (GC16, partial)
     Full,     // whole screen with a flash, clears ghosting (GC16, full)
 };
@@ -109,7 +110,7 @@ public:
     void touchDown(int id, int x, int y, uint64_t now);
     void touchMove(int id, int x, int y, uint64_t now);
     void touchUp(int id, uint64_t now);
-    void setPenNear(bool near) { penNear_ = near; }  // hovering over the screen, or on it
+    void setPenNear(bool near);  // hovering over the screen, or on it: fingers on the page are a palm
     // Mouse wheel and trackpad (desktop): zoom about a point, or move the page.
     void zoomBy(double factor, double x, double y, uint64_t now);
     void panBy(double dx, double dy, uint64_t now);
@@ -165,6 +166,7 @@ private:
     void moveViewTo(double zoom, const StrokePoint& anchor, double x, double y);  // `anchor` (page) to (x, y)
     void viewFrame(uint64_t now);
     void endViewGesture(uint64_t now);
+    void rejectPalm(const char* why);
     void addPage(uint64_t now);
     void eraseAt(const PenSample& s, uint64_t now);
     void previewArea(const IRect& r, uint64_t now);
@@ -225,8 +227,8 @@ private:
     PageTransform xf_;
     double zoom_ = 1;
 
-    // Pinching and panning: quick black-and-white previews made by scaling what was
-    // on screen when the gesture began, then one proper redraw at the end.
+    // Pinching and panning: quick black-and-white previews of the page as it moves,
+    // then one proper redraw at the end.
     struct Finger {
         int id;
         double x, y;
@@ -235,9 +237,14 @@ private:
     enum class ViewGesture { None, Pinch, Pan } viewGesture_ = ViewGesture::None;
     bool penNear_ = false;
     double pinchStartZoom_ = 1, pinchStartDist_ = 1;
+    // Fingers only zoom or pan once they've moved a little: a hand landing on the
+    // page shifts less. Until then (and if the pen comes near) it's undone quietly.
+    bool viewCommitted_ = false;
+    double startX_ = 0, startY_ = 0;  // where the fingers (their midpoint) started
+    PageTransform viewStart_;
+    double zoomStart_ = 1;
+    bool palm_ = false;  // the fingers down now are a palm: ignored until they all lift
     StrokePoint viewAnchor_{0, 0};  // the page point held under the fingers or pen
-    Canvas snapshot_{0, 0};
-    PageTransform snapshotXf_;
     bool viewDirty_ = false;
     uint64_t lastViewFrame_ = 0;
     int viewFrames_ = 0;

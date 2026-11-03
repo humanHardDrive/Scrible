@@ -11,6 +11,7 @@ namespace scrible {
 struct DisplayOptions {
     bool penMode = true;   // MTK "pen mode": low-latency DU updates for inking (Scribe 1st/2nd gen)
     bool fastMode = true;  // stop the driver from silently promoting partial updates to REAGL
+    bool a2 = true;        // zoom/pan previews after the first use A2 (~120 ms) rather than DU (~260 ms)
 };
 
 // Touch panel orientation quirks FBInk knows about for this device.

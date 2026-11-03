@@ -10,6 +10,7 @@
 //     --touch-transform SPEC     (default: FBInk's quirks for this device)
 //     --no-grab                  don't take exclusive access to the input devices
 //     --no-pen-mode              plain DU instead of the MediaTek pen mode
+//     --no-a2                    zoom/pan previews with DU only (if A2 misbehaves)
 //     --probe [SECONDS]          print display/input info, echo input events, exit
 
 #include <poll.h>
@@ -47,6 +48,7 @@ struct Args {
     std::string penTransform, touchTransform;
     bool grab = true;
     bool penMode = true;
+    bool a2 = true;
     int probeSeconds = -1;
 };
 
@@ -64,6 +66,7 @@ bool parseArgs(int argc, char** argv, Args& a) {
         else if (arg == "--touch-transform") { if (!value(a.touchTransform)) return false; }
         else if (arg == "--no-grab") a.grab = false;
         else if (arg == "--no-pen-mode") a.penMode = false;
+        else if (arg == "--no-a2") a.a2 = false;
         else if (arg == "--probe") {
             a.probeSeconds = 30;
             if (i + 1 < argc && argv[i + 1][0] != '-') a.probeSeconds = std::atoi(argv[++i]);
@@ -197,7 +200,7 @@ int main(int argc, char** argv) {
     if (!parseArgs(argc, argv, args)) {
         std::fprintf(stderr,
                      "usage: %s [FOLDER | notebook.xopp] [--pen DEV] [--touch DEV] [--pen-transform SPEC]\n"
-                     "          [--touch-transform SPEC] [--no-grab] [--no-pen-mode] [--probe [SECONDS]]\n",
+                     "          [--touch-transform SPEC] [--no-grab] [--no-pen-mode] [--no-a2] [--probe [SECONDS]]\n",
                      argv[0]);
         return 2;
     }
@@ -216,6 +219,7 @@ int main(int argc, char** argv) {
     scrible::FbinkDisplay display;
     scrible::DisplayOptions dopts;
     dopts.penMode = args.penMode;
+    dopts.a2 = args.a2;
     if (!display.open(dopts)) return 1;
     std::fprintf(stderr, "scrible: %s\n", display.describe().c_str());
 

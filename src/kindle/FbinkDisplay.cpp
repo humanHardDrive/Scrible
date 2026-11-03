@@ -1,6 +1,7 @@
 #include "FbinkDisplay.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 
 #include "fbink.h"
@@ -15,6 +16,10 @@ struct FbinkDisplay::State {
     bool penModeOn = false;
     bool penModeWorks = true;
     bool fastModeSet = false;
+    uint32_t previewMarker = 0;  // the last zoom/pan preview, until something waited for it
+    bool inPreviews = false;     // the last update was a preview: the screen is all black and white
+    int previewWaits = 0;        // ...and how long waiting for them took, for the log
+    double previewWaitMs = 0;
     std::vector<uint8_t> buf;
 };
 
@@ -80,6 +85,26 @@ void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
         const IRect r = d.rect.intersected(c.rect()).intersected({0, 0, width(), height()});
         if (r.empty()) continue;
 
+        // A whole-page preview takes the panel longer than the gesture takes to make
+        // the next one. So each waits until the one before it is on screen (whatever
+        // moved meanwhile goes into this one), and anything but ink waits for the last
+        // one, which mustn't land on top of the proper redraw that follows.
+        if (s_->previewMarker && d.mode != Refresh::Ink) {
+            const auto start = std::chrono::steady_clock::now();
+            fbink_wait_for_complete(s_->fd, s_->previewMarker);
+            s_->previewMarker = 0;
+            ++s_->previewWaits;
+            s_->previewWaitMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            if (d.mode != Refresh::Preview) {
+                std::fprintf(stderr, "scrible: waited for %d previews (%s) to reach the screen, %.0f ms each on average\n",
+                             s_->previewWaits, s_->opts.a2 ? "A2 after the first" : "DU",
+                             s_->previewWaitMs / s_->previewWaits);
+                s_->previewWaits = 0;
+                s_->previewWaitMs = 0;
+            }
+        }
+
+        // Previews go without pen mode: it's meant for small strokes.
         const bool fast = d.mode == Refresh::Ink || d.mode == Refresh::UI;
         // Pen mode only tolerates DU updates: switch it off before anything else,
         // and back on for the next stroke.
@@ -110,6 +135,9 @@ void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
         switch (d.mode) {
             case Refresh::Ink:
             case Refresh::UI: rc.wfm_mode = WFM_DU; break;
+            // A2 only goes from black and white to black and white, which the screen is
+            // once the first preview (DU) is on it.
+            case Refresh::Preview: rc.wfm_mode = s_->inPreviews && s_->opts.a2 ? WFM_A2 : WFM_DU; break;
             // GC16 rather than GL16: GL16 assumes pixels start out white, which
             // isn't true when ink disappears (erase, undo).
             case Refresh::Content: rc.wfm_mode = WFM_GC16; break;
@@ -120,6 +148,8 @@ void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
         }
         fbink_refresh(s_->fd, static_cast<uint32_t>(r.y0), static_cast<uint32_t>(r.x0), static_cast<uint32_t>(w),
                       static_cast<uint32_t>(h), &rc);
+        if (d.mode == Refresh::Preview) s_->previewMarker = fbink_get_last_marker();
+        s_->inPreviews = d.mode == Refresh::Preview;
     }
 }
 

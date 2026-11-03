@@ -42,6 +42,25 @@ The numbering differs from [koreader#11156](https://github.com/koreader/koreader
   ignored while the pen is in range. **Unverified:** that `stylus-custom` reports hover;
   the log's `pen hover …` line at exit says. Each zoom or pan logs its preview frame
   count, the slowest preview and the final redraw time (`scrible: zoom …`).
+  Confirmed on the Scribe: hover is reported; a preview takes ~50 ms to compute and the
+  final redraw 10–50 ms, so the panel, not the CPU, sets the pace.
+- Zoom/pan previews are near-full-screen DU updates, which take the panel longer than
+  the gesture takes to produce the next one. Sent every 120 ms with pen mode on, they
+  queued up (sluggish) and left black marks on rule lines after the final redraw. Now
+  each preview waits for the previous one to complete (`fbink_wait_for_complete`), any
+  other update except ink waits for the last preview, and previews run with pen mode
+  off. That got rid of the marks (confirmed on the Scribe). The log reports the waits (`scrible: waited for N previews …`): about 165 ms on
+  top of each preview's ~50 ms, i.e. ~4 updates a second with DU.
+- Previews are drawn from the page (first versions scaled a snapshot of the screen,
+  which left anything panned into view blank). The first preview of a gesture uses DU
+  to get the screen to pure black and white; the rest use A2 (~120 ms per FBInk, B&W to
+  B&W only). Confirmed on the Scribe: waits fell from ~165 ms to ~40–100 ms per
+  preview, no errors, and it felt better. `--no-a2` goes back to DU.
+- Palm rejection for pinching: a hand landing on the page made two contacts before the
+  pen came near, which zoomed to ~101–103% and flashed. Now fingers must move 50 px
+  (spread or midpoint) before anything shows, the pen coming near undoes a gesture in
+  progress, three or more contacts are a palm, and a rejected hand is ignored until it
+  lifts. Each rejection is logged (`scrible: touch taken for a palm …`).
 
 Re-check orientation over SSH with `sh /mnt/us/scrible/run.sh --probe 30`, which marks
 where the app sees the pen and fingers; fix it with `--pen-transform` /

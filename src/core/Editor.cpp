@@ -17,10 +17,11 @@ constexpr uint8_t kOffPageGray = 220;
 constexpr double kMinPointDistPx = 0.75;  // closer samples are dropped
 constexpr size_t kMaxUndo = 1000;
 constexpr uint64_t kDragFrameMs = 50;  // at most this often while moving a selection (e-ink can't keep up)
-constexpr uint64_t kViewFrameMs = 120;  // ...or the whole page, while zooming and panning
+constexpr uint64_t kViewFrameMs = 60;  // ...or the whole page (the Kindle also waits for the last one)
 constexpr double kMaxZoom = 4;
 constexpr double kZoomSteps[] = {1, 1.5, 2, 3, 4};  // the zoom buttons'
 constexpr int kTapId = -1;                         // the finger of touchDown(x, y)
+constexpr double kFingerSlop = 50;                 // px fingers move before they zoom or pan (~4 mm)
 
 bool sameView(const PageTransform& a, const PageTransform& b) {
     return a.scale == b.scale && a.offsetX == b.offsetX && a.offsetY == b.offsetY;
@@ -297,7 +298,7 @@ std::vector<Damage> Editor::takeDamage() {
     // span page pixels that the Content one repaints, and DU reaching them first would
     // leave them stale (see Refresh). After the Content refresh they are unchanged, so
     // DU passes over them.
-    for (Refresh m : {Refresh::Ink, Refresh::Content, Refresh::UI}) {
+    for (Refresh m : {Refresh::Ink, Refresh::Preview, Refresh::Content, Refresh::UI}) {
         IRect u;
         for (const Damage& d : damage_)
             if (d.mode == m) u = u.united(d.rect);
@@ -471,6 +472,8 @@ void Editor::touchDown(int id, int x, int y, uint64_t now) {
     }
     if (penNear_ || !pageArea_.contains(x, y)) return;  // a palm, most likely
     fingers_.push_back({id, double(x), double(y)});
+    if (palm_) return;
+    if (fingers_.size() > 2) return rejectPalm("three or more fingers");
     if (fingers_.size() == 2) {
         // Pinch: the page point between the fingers stays between them.
         if (viewGesture_ == ViewGesture::None) beginViewGesture();
@@ -478,12 +481,36 @@ void Editor::touchDown(int id, int x, int y, uint64_t now) {
         const Finger &a = fingers_[0], &b = fingers_[1];
         pinchStartZoom_ = zoom_;
         pinchStartDist_ = std::max(1.0, std::hypot(a.x - b.x, a.y - b.y));
-        viewAnchor_ = {xf_.toPageX((a.x + b.x) / 2), xf_.toPageY((a.y + b.y) / 2)};
+        startX_ = (a.x + b.x) / 2;
+        startY_ = (a.y + b.y) / 2;
+        viewAnchor_ = {xf_.toPageX(startX_), xf_.toPageY(startY_)};
+        viewCommitted_ = false;
     } else if (fingers_.size() == 1 && tool_ == ToolKind::Pan) {
         beginViewGesture();
         viewGesture_ = ViewGesture::Pan;
+        startX_ = x;
+        startY_ = y;
         viewAnchor_ = {xf_.toPageX(x), xf_.toPageY(y)};
+        viewCommitted_ = false;
     }
+}
+
+void Editor::setPenNear(bool near) {
+    penNear_ = near;
+    if (near && viewGesture_ != ViewGesture::None && !fingers_.empty()) rejectPalm("the pen came near");
+}
+
+// The fingers turned out to be a hand resting on the page: put the view back as it
+// was, and ignore them until they lift.
+void Editor::rejectPalm(const char* why) {
+    palm_ = true;
+    if (viewGesture_ == ViewGesture::None) return;
+    viewGesture_ = ViewGesture::None;
+    viewDirty_ = false;
+    const bool shown = viewFrames_ > 0;
+    setView(viewStart_, zoomStart_);
+    if (shown) redrawAll(Refresh::Full);  // the previews went out: clear them
+    std::fprintf(stderr, "scrible: touch taken for a palm (%s)%s\n", why, shown ? " after it began to zoom" : "");
 }
 
 void Editor::touchMove(int id, int x, int y, uint64_t now) {
@@ -493,9 +520,16 @@ void Editor::touchMove(int id, int x, int y, uint64_t now) {
     f->y = y;
     if (viewGesture_ == ViewGesture::Pinch && fingers_.size() >= 2) {
         const Finger &a = fingers_[0], &b = fingers_[1];
-        const double factor = std::hypot(a.x - b.x, a.y - b.y) / pinchStartDist_;
-        moveViewTo(pinchStartZoom_ * factor, viewAnchor_, (a.x + b.x) / 2, (a.y + b.y) / 2);
+        const double dist = std::hypot(a.x - b.x, a.y - b.y);
+        const double mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        if (!viewCommitted_ && std::fabs(dist - pinchStartDist_) < kFingerSlop &&
+            std::hypot(mx - startX_, my - startY_) < kFingerSlop)
+            return;
+        viewCommitted_ = true;
+        moveViewTo(pinchStartZoom_ * dist / pinchStartDist_, viewAnchor_, mx, my);
     } else if (viewGesture_ == ViewGesture::Pan) {
+        if (!viewCommitted_ && std::hypot(x - startX_, y - startY_) < kFingerSlop) return;
+        viewCommitted_ = true;
         moveViewTo(zoom_, viewAnchor_, x, y);
     } else {
         return;
@@ -506,6 +540,7 @@ void Editor::touchMove(int id, int x, int y, uint64_t now) {
 void Editor::touchUp(int id, uint64_t now) {
     fingers_.erase(std::remove_if(fingers_.begin(), fingers_.end(), [&](const Finger& g) { return g.id == id; }),
                    fingers_.end());
+    if (fingers_.empty()) palm_ = false;
     const bool over = (viewGesture_ == ViewGesture::Pinch && fingers_.size() < 2) ||
                       (viewGesture_ == ViewGesture::Pan && fingers_.empty());
     if (!over) return;
@@ -568,46 +603,29 @@ void Editor::panBy(double dx, double dy, uint64_t now) {
 void Editor::beginViewGesture() {
     closePanel();
     closePaperMenu();
-    // Previews scale the page as it is on screen now, without what's drawn over it.
-    snapshot_ = canvas_;
-    for (IRect r : {panel_.tabRect(), overlayArea()}) {
-        r = r.intersected(pageArea_);
-        if (r.empty()) continue;
-        snapshot_.fill(r, kOffPageGray);
-        drawPage(snapshot_, currentPage(), xf_, r, opts_.render);
-    }
-    snapshotXf_ = xf_;
+    viewStart_ = xf_;
+    zoomStart_ = zoom_;
+    viewCommitted_ = true;  // the pen pans right away; fingers set it back
     viewDirty_ = false;
     viewFrames_ = 0;
     slowestViewFrameMs_ = 0;
     lastViewFrame_ = 0;
 }
 
-// A preview: each pixel taken from where it was when the gesture began, in black
-// and white for DU. Whatever wasn't on screen then shows as blank page.
+// A preview: the page drawn where it is now, in black and white (rule lines and
+// highlights vanish for the moment) for the fast waveforms.
 void Editor::viewFrame(uint64_t now) {
     if (!viewDirty_) return;
     const auto start = std::chrono::steady_clock::now();
     const IRect a = pageArea_;
-    const IRect page = xf_.pageRect(currentPage()).intersected(a);
-    const double k = snapshotXf_.scale / xf_.scale;
-    std::vector<int> srcX(static_cast<size_t>(a.width()));
-    for (int x = a.x0; x < a.x1; ++x)
-        srcX[static_cast<size_t>(x - a.x0)] = static_cast<int>(std::floor((x + 0.5 - xf_.offsetX) * k + snapshotXf_.offsetX));
+    canvas_.fill(a, kOffPageGray);
+    drawPage(canvas_, currentPage(), xf_, a, opts_.render);
     for (int y = a.y0; y < a.y1; ++y) {
-        const int sy = static_cast<int>(std::floor((y + 0.5 - xf_.offsetY) * k + snapshotXf_.offsetY));
-        const uint8_t* src = sy >= a.y0 && sy < a.y1 ? snapshot_.row(sy) : nullptr;
-        const bool pageRow = y >= page.y0 && y < page.y1;
         uint8_t* row = canvas_.row(y);
-        for (int x = a.x0; x < a.x1; ++x) {
-            const int sx = srcX[static_cast<size_t>(x - a.x0)];
-            uint8_t v = pageRow && x >= page.x0 && x < page.x1 ? 255 : kOffPageGray;
-            if (src && sx >= a.x0 && sx < a.x1) v = src[sx];
-            row[x] = v < 128 ? 0 : 255;
-        }
+        for (int x = a.x0; x < a.x1; ++x) row[x] = row[x] < 128 ? 0 : 255;
     }
     drawChrome(a);
-    damage_.push_back({a, Refresh::Ink});
+    damage_.push_back({a, Refresh::Preview});
     viewDirty_ = false;
     lastViewFrame_ = now;
     ++viewFrames_;
@@ -617,7 +635,6 @@ void Editor::viewFrame(uint64_t now) {
 void Editor::endViewGesture(uint64_t now) {
     const bool changed = viewFrames_ > 0 || viewDirty_;
     viewDirty_ = false;
-    snapshot_ = Canvas(0, 0);
     if (!changed) return;
     status_ = std::to_string(std::lround(zoom_ * 100)) + "%";
     statusUntil_ = now + 1500;
@@ -1178,6 +1195,7 @@ void Editor::setPage(size_t index) {
     fingers_.clear();
     viewGesture_ = ViewGesture::None;
     viewDirty_ = false;
+    palm_ = false;
     settle_ = {};
     settleAt_ = 0;
     redrawAll(Refresh::Full);
