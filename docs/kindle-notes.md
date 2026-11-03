@@ -60,7 +60,11 @@ The numbering differs from [koreader#11156](https://github.com/koreader/koreader
   pen came near, which zoomed to ~101–103% and flashed. Now fingers must move 50 px
   (spread or midpoint) before anything shows, the pen coming near undoes a gesture in
   progress, three or more contacts are a palm, and a rejected hand is ignored until it
-  lifts. Each rejection is logged (`scrible: touch taken for a palm …`).
+  lifts. Each rejection is logged (`scrible: touch taken for a palm …`). On the Scribe
+  this removed the accidental 101–103% zooms; in one session it caught a hand three
+  times, once only after a preview had shown (undone with a flash). Good enough for
+  now; `kFingerSlop` in Editor.cpp, or a short delay before the first preview, would
+  tighten it.
 
 Re-check orientation over SSH with `sh /mnt/us/scrible/run.sh --probe 30`, which marks
 where the app sees the pen and fingers; fix it with `--pen-transform` /
