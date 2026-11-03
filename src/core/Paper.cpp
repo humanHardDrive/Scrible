@@ -43,7 +43,7 @@ std::optional<Paper> paperOf(const Background& b) {
     if (b.style == "plain") return Paper{PaperKind::Blank, -1, false};
     if (isRuled(b.style))
         return Paper{PaperKind::Ruled, presetIndex(kRuledSpacings, backgroundSetting(b, "r1", kDefaultRuledSpacing)),
-                     b.style == "lined"};
+                     b.style == "lined", backgroundSetting(b, "scrible-full", 0) == 0};
     if (b.style == "graph")
         return Paper{PaperKind::Grid, presetIndex(kGridSpacings, backgroundSetting(b, "r1", kDefaultGraphSpacing)),
                      false};
@@ -69,6 +69,7 @@ void setPaper(Background& b, const Paper& p) {
         std::snprintf(buf, sizeof buf, "r1=%g", std::round(spacing * 100) / 100);
         b.config = buf;
     }
+    if (p.kind == PaperKind::Ruled && !p.ends) b.config += b.config.empty() ? "scrible-full=1" : ",scrible-full=1";
     b.xml.clear();  // written afresh from the fields
 }
 

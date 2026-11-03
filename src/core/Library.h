@@ -82,9 +82,11 @@ public:
     void setPlatformInfo(std::vector<std::string> lines) { platformInfo_ = std::move(lines); }
     void redrawAll(Refresh mode = Refresh::Full);
 
-    Intent tap(int x, int y);  // pen or finger
+    Intent tap(int x, int y, uint64_t now = 0);  // pen or finger; buttons show they were pressed
     Intent perform(Action a);
     std::vector<Damage> takeDamage();
+    void onIdle(uint64_t now);
+    int msUntilIdleWork(uint64_t now) const;  // -1 when nothing is scheduled
 
 private:
     enum class Mode { List, Menu, ConfirmDelete, About, Prompt };
@@ -97,6 +99,8 @@ private:
 
     bool dialogOpen() const { return mode_ == Mode::Menu || mode_ == Mode::ConfirmDelete || mode_ == Mode::About; }
     size_t pageCount() const;
+    ToolbarState toolbarState() const;
+    void endFlash();
     void drawList();
     void drawRow(size_t index, bool highlighted, bool menuPressed = false);
     // Draws a dialog next to (not over) `anchor`, the row it's about.
@@ -124,6 +128,10 @@ private:
     PromptFor promptFor_ = PromptFor::New;
     size_t target_ = 0;  // the notebook a menu, confirmation or rename is about
     bool exiting_ = false;  // EXIT was tapped: shown pressed while the app leaves
+    // A button showing it was pressed, for a moment: a toolbar one, or a key.
+    Action flashAction_ = Action::None;
+    IRect flashKey_;
+    uint64_t flashUntil_ = 0;
     IRect dialog_;
     std::vector<DialogButton> dialogButtons_;
     std::vector<Damage> damage_;

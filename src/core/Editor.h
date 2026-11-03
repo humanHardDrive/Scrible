@@ -124,6 +124,9 @@ public:
     void zoomBy(double factor, double x, double y, uint64_t now);
     void panBy(double dx, double dy, uint64_t now);
     void perform(Action a, uint64_t now);
+    // A tap on a button: does what it's for, and shows it was pressed (inverted for a
+    // moment), unless it shows that already (now selected or open, or gone).
+    void press(Action a, uint64_t now);
 
     bool save(uint64_t now, bool quiet = false);
 
@@ -224,6 +227,8 @@ private:
     void openAnswer(size_t i);
     void mathTap(int x, int y, uint64_t now);
     void closeMath();
+    void flash(const IRect& r, uint64_t now);
+    void endFlash();
     void replaceAnswer(size_t i, ForeignElement a, uint64_t now);
     void deleteAnswer(uint64_t now);
     void dragAnswerTo(const StrokePoint& p);
@@ -325,6 +330,11 @@ private:
     uint64_t settleAt_ = 0;  // 0 = nothing pending
     std::string status_;
     uint64_t statusUntil_ = 0;
+    // A button showing it was pressed: a toolbar one by its action, any other by its
+    // place on the screen (inverted there, and drawn again afterwards).
+    Action flashAction_ = Action::None;
+    IRect flashRect_;
+    uint64_t flashUntil_ = 0;
     uint64_t exitArmedUntil_ = 0;
     Action pendingExit_ = Action::None;  // BACK or EXIT, shown pressed, done on the next idle pass
     bool pendingExitShown_ = false;

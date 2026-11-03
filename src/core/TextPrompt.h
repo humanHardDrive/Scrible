@@ -30,6 +30,8 @@ public:
     std::vector<Damage> takeDamage();
     const Toolbar& toolbar() const { return bar_; }
     IRect keyRect(const std::string& label) const;  // by unshifted label, e.g. "a", "SPACE"
+    IRect keyAt(int x, int y) const;                // the key there, if any
+    void redrawKeys(Canvas& c);
 
 private:
     enum class KeyKind { Char, Shift, Delete, Clear, Space };

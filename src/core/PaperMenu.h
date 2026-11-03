@@ -18,7 +18,7 @@ struct PaperMenuState {
 
 // The menu that drops down below the toolbar's PAGE button, for the current page:
 // BLANK / RULED / GRID, then the spacing (ruled and grid), then the margin line
-// (ruled), then DELETE PAGE. Black and white only, like the toolbar.
+// (ruled), and the blank top and bottom (ruled), then DELETE PAGE. Black and white only, like the toolbar.
 class PaperMenu {
 public:
     // `anchor` is the PAGE button; the menu stays within `area`, the page area.

@@ -355,14 +355,7 @@ void Library::drawRow(size_t index, bool highlighted, bool menuPressed) {
 void Library::drawList() {
     // Strictly black and white, like the toolbar, so any part can be refreshed with DU.
     canvas_.fill(canvas_.rect(), 255);
-    ToolbarState s;
-    if (page_ == 0) s.disabled.push_back(Action::PrevPage);
-    if (page_ + 1 >= pageCount()) s.disabled.push_back(Action::NextPage);
-    s.labels = {{Action::Sort, order_ == NotebookOrder::Name ? "A-Z" : "NEWEST"}};
-    if (mode_ == Mode::About) s.active.push_back(Action::About);
-    if (exiting_) s.active.push_back(Action::Exit);
-    s.text = std::to_string(page_ + 1) + "/" + std::to_string(pageCount());
-    toolbar_.draw(canvas_, s);
+    toolbar_.draw(canvas_, toolbarState());
 
     const int titleY = toolbar_.rect().y1 + 40;
     canvas_.drawText(kMargin, titleY, "NOTEBOOKS", kTitleScale, 0, canvas_.rect());
@@ -380,6 +373,21 @@ void Library::drawList() {
     }
     for (size_t i = page_ * rowsPerPage_; i < notebooks_.size() && i < (page_ + 1) * rowsPerPage_; ++i)
         drawRow(i, false);
+}
+
+ToolbarState Library::toolbarState() const {
+    ToolbarState s;
+    if (page_ == 0) s.disabled.push_back(Action::PrevPage);
+    if (page_ + 1 >= pageCount()) s.disabled.push_back(Action::NextPage);
+    s.labels = {{Action::Sort, order_ == NotebookOrder::Name ? "A-Z" : "NEWEST"}};
+    if (mode_ == Mode::About) s.active.push_back(Action::About);
+    if (exiting_) s.active.push_back(Action::Exit);
+    if (flashAction_ != Action::None) {
+        s.active.push_back(flashAction_);
+        s.disabled.erase(std::remove(s.disabled.begin(), s.disabled.end(), flashAction_), s.disabled.end());
+    }
+    s.text = std::to_string(page_ + 1) + "/" + std::to_string(pageCount());
+    return s;
 }
 
 void Library::drawDialog(const IRect& anchor, const std::string& title, const std::vector<std::string>& lines,
@@ -517,9 +525,24 @@ Library::Intent Library::promptResult(TextPrompt::Result r) {
     return {};
 }
 
-Library::Intent Library::tap(int x, int y) {
+Library::Intent Library::tap(int x, int y, uint64_t now) {
     switch (mode_) {
-        case Mode::Prompt: return promptResult(prompt_.tap(canvas_, x, y));
+        case Mode::Prompt: {
+            // A key shows it was pressed: inverted for a moment.
+            const IRect key = prompt_.keyAt(x, y);
+            const Intent intent = promptResult(prompt_.tap(canvas_, x, y));
+            if (mode_ == Mode::Prompt && !key.empty()) {
+                endFlash();
+                for (int yy = key.y0; yy < key.y1; ++yy) {
+                    uint8_t* row = canvas_.row(yy);
+                    for (int xx = key.x0; xx < key.x1; ++xx) row[xx] = static_cast<uint8_t>(255 - row[xx]);
+                }
+                damage_.push_back({key, Refresh::UI});
+                flashKey_ = key;
+                flashUntil_ = now + 250;
+            }
+            return intent;
+        }
         case Mode::Menu:
         case Mode::ConfirmDelete:
         case Mode::About:
@@ -529,7 +552,21 @@ Library::Intent Library::tap(int x, int y) {
             return {};
         case Mode::List: break;
     }
-    if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y));
+    if (toolbar_.rect().contains(x, y)) {
+        // The button shows it was pressed, unless it shows what it did already.
+        const Action a = toolbar_.hit(x, y);
+        const auto has = [](const std::vector<Action>& v, Action b) { return std::find(v.begin(), v.end(), b) != v.end(); };
+        const bool wasDisabled = has(toolbarState().disabled, a);
+        const Intent intent = perform(a);
+        if (a != Action::None && !wasDisabled && mode_ == Mode::List && !has(toolbarState().active, a)) {
+            endFlash();
+            flashAction_ = a;
+            flashUntil_ = now + 250;
+            toolbar_.draw(canvas_, toolbarState());
+            damage_.push_back({toolbar_.rect(), Refresh::UI});
+        }
+        return intent;
+    }
     for (size_t i = page_ * rowsPerPage_; i < notebooks_.size() && i < (page_ + 1) * rowsPerPage_; ++i) {
         const IRect r = rowRect(i);
         if (!r.contains(x, y)) continue;
@@ -603,6 +640,30 @@ Library::Intent Library::perform(Action a) {
         }
         default: return {};
     }
+}
+
+void Library::endFlash() {
+    flashUntil_ = 0;
+    if (flashAction_ != Action::None) {
+        flashAction_ = Action::None;
+        if (mode_ != Mode::Prompt) {
+            toolbar_.draw(canvas_, toolbarState());
+            damage_.push_back({toolbar_.rect(), Refresh::UI});
+        }
+    }
+    if (!flashKey_.empty()) {
+        if (mode_ == Mode::Prompt) prompt_.redrawKeys(canvas_);
+        flashKey_ = {};
+    }
+}
+
+void Library::onIdle(uint64_t now) {
+    if (flashUntil_ && now >= flashUntil_) endFlash();
+}
+
+int Library::msUntilIdleWork(uint64_t now) const {
+    if (!flashUntil_) return -1;
+    return flashUntil_ <= now ? 0 : static_cast<int>(flashUntil_ - now);
 }
 
 std::vector<Damage> Library::takeDamage() {

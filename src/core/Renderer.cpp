@@ -132,8 +132,13 @@ void drawBackground(Canvas& c, const Page& p, const PageTransform& t, const IRec
 
     if (style == "lined" || style == "ruled") {
         const double s = spacing(kDefaultRuledSpacing);
-        for (int i = 0; kRulingTopMargin + i * s <= p.height - kRulingBottomMargin; ++i)
-            hline(kRulingTopMargin + i * s, kRulingGray);
+        if (backgroundSetting(p.background, "scrible-full", 0) != 0) {
+            // Lines all the way down, from one spacing below the top.
+            for (int i = 1; i * s <= p.height - s / 2; ++i) hline(i * s, kRulingGray);
+        } else {
+            for (int i = 0; kRulingTopMargin + i * s <= p.height - kRulingBottomMargin; ++i)
+                hline(kRulingTopMargin + i * s, kRulingGray);
+        }
         if (style == "lined") {
             const double m = backgroundSetting(p.background, "m1", kDefaultMarginX);
             vline(m < 0 ? p.width + m : m, kMarginGray);  // negative: from the right edge

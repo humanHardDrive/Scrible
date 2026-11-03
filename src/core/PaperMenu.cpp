@@ -23,6 +23,7 @@ const char* label(Action a, PaperKind kind) {
         case Action::PaperMedium: return "MEDIUM";
         case Action::PaperWide: return grid ? "LARGE" : "WIDE";
         case Action::PaperMargin: return "MARGIN";
+        case Action::PaperEnds: return "BLANK TOP & BOTTOM";
         case Action::DeletePage: return "DELETE PAGE";
         default: return "";
     }
@@ -59,7 +60,10 @@ void PaperMenu::show(const PaperMenuState& s) {
         row(kKinds);
         const bool ruled = paper && paper->kind == PaperKind::Ruled;
         if (ruled || (paper && paper->kind == PaperKind::Grid)) row(kSpacings);
-        if (ruled) wide(Action::PaperMargin);
+        if (ruled) {
+            wide(Action::PaperMargin);
+            wide(Action::PaperEnds);
+        }
     }
     if (s.canDelete) {
         if (s.paperChoices) y += kRowGap;  // set apart from the paper
@@ -102,9 +106,9 @@ void PaperMenu::draw(Canvas& c, const IRect& clip) const {
         }
         if (b.action == Action::DeletePage) on = state_.deleteArmed;
         drawBox(c, b.r, on, clip);
-        if (b.action == Action::PaperMargin) {
+        if (b.action == Action::PaperMargin || b.action == Action::PaperEnds) {
             drawLabel(c, b.r, b.r.x0 + kTextPad, label(b.action, kind), 0, clip);
-            drawCheckBox(c, b.r, paper && paper->margin, clip);
+            drawCheckBox(c, b.r, paper && (b.action == Action::PaperMargin ? paper->margin : paper->ends), clip);
         } else if (b.action == Action::DeletePage) {
             drawLabel(c, b.r, -1, state_.deleteArmed ? "TAP AGAIN TO DELETE" : label(b.action, kind), on ? 255 : 0, clip);
         } else {

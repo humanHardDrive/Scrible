@@ -203,6 +203,17 @@ std::vector<Damage> TextPrompt::takeDamage() {
     return out;
 }
 
+IRect TextPrompt::keyAt(int x, int y) const {
+    for (const Key& k : keys_)
+        if (k.r.contains(x, y)) return k.r;
+    return {};
+}
+
+void TextPrompt::redrawKeys(Canvas& c) {
+    drawKeys(c);
+    damage_.push_back({keyboard_, Refresh::UI});
+}
+
 IRect TextPrompt::keyRect(const std::string& label) const {
     for (const Key& k : keys_)
         if (k.label == label) return k.r;

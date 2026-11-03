@@ -1746,6 +1746,8 @@ TEST(paper_settings_and_presets) {
                           Case{{PaperKind::Ruled, 0, true}, "lined", "r1=18"},
                           Case{{PaperKind::Ruled, 1, true}, "lined", ""},
                           Case{{PaperKind::Ruled, 2, false}, "ruled", "r1=30"},
+                          Case{{PaperKind::Ruled, 1, true, false}, "lined", "scrible-full=1"},
+                          Case{{PaperKind::Ruled, 0, false, false}, "ruled", "r1=18,scrible-full=1"},
                           Case{{PaperKind::Grid, 0, false}, "graph", ""},
                           Case{{PaperKind::Grid, 1, false}, "graph", "r1=21.26"},
                           Case{{PaperKind::Grid, 2, false}, "graph", "r1=28.35"}}) {
@@ -1757,7 +1759,7 @@ TEST(paper_settings_and_presets) {
         const auto back = paperOf(bg);
         CHECK(back && back->kind == c.paper.kind);
         if (back && c.paper.kind != PaperKind::Blank) CHECK(back->spacing == c.paper.spacing);
-        if (back && c.paper.kind == PaperKind::Ruled) CHECK(back->margin == c.paper.margin);
+        if (back && c.paper.kind == PaperKind::Ruled) CHECK(back->margin == c.paper.margin && back->ends == c.paper.ends);
     }
     // A spacing that isn't one of ours is kept when only the margin changes.
     Background custom;
@@ -1803,6 +1805,13 @@ TEST(draws_paper_spacing_margin_and_footer) {
         CHECK(c.at(100, 104) == 255);
         CHECK(c.at(100, 170) == 255);  // in the 60pt footer, like Xournal++
         CHECK(c.at(72, 150) == 255);   // no margin line
+    }
+    {
+        // Without the blank top and bottom: lines from one spacing down, nearly to the bottom.
+        Canvas c(200, 200);
+        drawPage(c, page("lined", "r1=30,scrible-full=1"), PageTransform{}, c.rect());
+        CHECK(c.at(100, 30) == 200 && c.at(100, 60) == 200 && c.at(100, 180) == 200);
+        CHECK(c.at(100, 15) == 255 && c.at(72, 10) == 170);  // the margin line still runs the full height
     }
     {
         Canvas c(200, 200);
@@ -1880,6 +1889,10 @@ TEST(paper_menu_changes_this_page_only) {
     tap(Action::PaperMargin);
     tap(Action::PaperNarrow);
     CHECK(bg(1).style == "ruled" && bg(1).config == "r1=18");
+    tap(Action::PaperEnds);  // lines all the way down
+    CHECK(bg(1).config == "r1=18,scrible-full=1");
+    tap(Action::PaperEnds);
+    CHECK(bg(1).config == "r1=18");
     e.touchDown(1000, 2000, t += 10);  // a finger elsewhere closes it
     flush();
     CHECK(!menu.open() && bg(0).style == "graph");
@@ -2723,6 +2736,98 @@ TEST(math_works_while_zoomed_in) {
     CHECK(info.y0 > 1160 + 170 && info.y1 < 2480);  // below the second line, on screen
     tap(info);
     CHECK(e.mathPopup().open() && e.mathPopup().result() == "SUM OF 2 = 42");
+}
+
+TEST(buttons_show_they_were_pressed) {
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, Document{}, tempPath("flash.xopp"), o);
+    EinkPanel panel(1860, 2480);
+    auto flush = [&] {
+        for (const Damage& d : e.takeDamage()) panel.refresh(e.canvas(), d);
+    };
+    uint64_t t = 1000;
+    auto inverted = [&](const IRect& r) { return e.canvas().at(r.x0 + 8, r.y0 + 8) == 0; };  // black inside
+    auto tap = [&](const IRect& r) {
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+    };
+    drawLine(e, 400, 900, 800, t);
+    drawLine(e, 400, 900, 900, t);
+    e.onIdle(t += 1000);
+    flush();
+    // UNDO and REDO: inverted for a moment, then back. The last UNDO flashes too,
+    // before it's greyed out.
+    const IRect undo = e.toolbar().buttonRect(Action::Undo), redo = e.toolbar().buttonRect(Action::Redo);
+    for (int k = 0; k < 2; ++k) {
+        tap(undo);
+        CHECK(inverted(undo));
+        e.onIdle(t += 300);
+        flush();
+        CHECK(!inverted(undo));
+    }
+    tap(redo);
+    CHECK(inverted(redo));
+    e.onIdle(t += 300);
+    flush();
+    CHECK(!inverted(redo));
+    // A zoom button in the side menu.
+    tap(e.toolPanel().buttonRect(Action::Tools));
+    const IRect in = e.toolPanel().buttonRect(Action::ZoomIn);
+    tap(in);
+    CHECK(inverted(in));
+    e.onIdle(t += 300);
+    flush();
+    CHECK(!inverted(in));
+    tap(e.toolPanel().buttonRect(Action::ZoomFit));
+    e.onIdle(t += 300);
+    e.touchDown(1500, 2300, t += 10);  // put the menu away
+    flush();
+    // DUPLICATE in the selection's menu.
+    e.perform(Action::Lasso, t += 10);
+    e.penDown({300, 760, 0.5, false}, t += 10);
+    for (const StrokePoint& p : std::vector<StrokePoint>{{1000, 760}, {1000, 840}, {300, 840}, {300, 765}})
+        e.penMove({p.x, p.y, 0.5, false}, t += 20);
+    e.penUp(t += 10);
+    flush();
+    tap(e.selectionButton(Action::EditMenu));
+    tap(e.selectionButton(Action::Duplicate));
+    const IRect dup = e.selectionButton(Action::Duplicate);
+    CHECK(inverted(dup));
+    e.onIdle(t += 300);
+    flush();
+    CHECK(!inverted(dup));
+    e.onIdle(t += 1000);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+}
+
+TEST(keyboard_keys_and_list_buttons_show_they_were_pressed) {
+    const std::string dir = tempDir("flash-list");
+    AppOptions o;
+    o.notebooksDir = dir;
+    uint64_t t = 0;
+    App app(1860, 2480, o);
+    Library& lib = *app.library();
+    app.takeDamage();
+    auto black = [&](const IRect& r) { return app.canvas().at(r.x0 + 6, r.y0 + 6) == 0; };
+    // The sort button.
+    const IRect sort = lib.toolbar().buttonRect(Action::Sort);
+    tapButton(app, lib.toolbar(), Action::Sort, t);
+    CHECK(black(sort));
+    app.onIdle(t += 300);
+    CHECK(!black(sort));
+    // A key of the keyboard.
+    tapButton(app, lib.toolbar(), Action::NewNotebook, t);
+    CHECK(lib.prompting());
+    const IRect a = lib.prompt().keyRect("a");
+    tapAt(app, a, t);
+    CHECK(black(a) && lib.prompt().text() == "A");
+    CHECK(app.msUntilIdleWork(t) >= 0);
+    app.onIdle(t += 300);
+    CHECK(!black(a));
+    removeDir(dir);
 }
 
 int main() {

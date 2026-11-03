@@ -183,7 +183,9 @@ From Xournal++'s `SaveHandler.cpp` / `XmlParser.cpp`:
   and `m1` (the margin line's x; negative counts from the right edge). Defaults: 24pt
   ruling, 14.17pt (5 mm) squares, margin at 72pt. Ruled lines start 80pt down and stop
   60pt above the bottom. Xournal++ only writes `config` when it isn't empty, and so do
-  we. From `view/background/*BackgroundView.cpp` and `model/BackgroundConfig.h`.
+  we. Scrible adds `scrible-full=1` for ruled lines without the blank header and footer
+  (lines from one spacing below the top to half a spacing above the bottom); Xournal++
+  ignores the key and draws its usual header and footer. From `view/background/*BackgroundView.cpp` and `model/BackgroundConfig.h`.
 - `fileversion` 4 is the classic layout. Version 5 adds `matrix=` transforms on text and
   images. The app never lowers the version of a file it loaded.
 - A missing `fileversion` means the file came from the original Xournal; Xournal++ then

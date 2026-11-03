@@ -108,7 +108,7 @@ void App::penDown(const PenSample& s, uint64_t now) {
         editor_->penDown(s, now);
         afterEditorInput();
     } else if (!deferred_) {
-        handle(library_->tap(static_cast<int>(s.x), static_cast<int>(s.y)), now);
+        handle(library_->tap(static_cast<int>(s.x), static_cast<int>(s.y), now), now);
     }
 }
 
@@ -125,7 +125,7 @@ void App::touchDown(int x, int y, uint64_t now) {
         editor_->touchDown(x, y, now);
         afterEditorInput();
     } else if (!deferred_) {
-        handle(library_->tap(x, y), now);
+        handle(library_->tap(x, y, now), now);
     }
 }
 
@@ -135,7 +135,7 @@ void App::touchDown(int id, int x, int y, uint64_t now) {
         editor_->touchDown(id, x, y, now);
         afterEditorInput();
     } else if (!deferred_ && fingers_ == 1) {
-        handle(library_->tap(x, y), now);
+        handle(library_->tap(x, y, now), now);
     }
 }
 
@@ -180,12 +180,15 @@ void App::onIdle(uint64_t now) {
     if (editor_) {
         editor_->onIdle(now);
         afterEditorInput();  // BACK and EXIT finish here
+    } else if (library_) {
+        library_->onIdle(now);
     }
 }
 
 int App::msUntilIdleWork(uint64_t now) const {
     if (deferred_) return 0;
-    return editor_ ? editor_->msUntilIdleWork(now) : -1;
+    if (editor_) return editor_->msUntilIdleWork(now);
+    return library_ ? library_->msUntilIdleWork(now) : -1;
 }
 
 std::vector<Damage> App::takeDamage() { return editor_ ? editor_->takeDamage() : library_->takeDamage(); }

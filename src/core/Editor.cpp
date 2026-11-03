@@ -20,6 +20,7 @@ constexpr uint64_t kDragFrameMs = 50;  // at most this often while moving a sele
 constexpr uint64_t kViewFrameMs = 60;  // ...or the whole page (the Kindle also waits for the last one)
 constexpr double kMaxZoom = 4;
 constexpr double kZoomSteps[] = {1, 1.5, 2, 3, 4};  // the zoom buttons'
+constexpr uint64_t kFlashMs = 250;                  // how long a pressed button shows it
 constexpr int kTapId = -1;                         // the finger of touchDown(x, y)
 constexpr double kFingerSlop = 50;                 // px fingers move before they zoom or pan (~4 mm)
 
@@ -113,6 +114,7 @@ double Editor::pointWidth(const PenSample& s) const {
 
 ToolbarState Editor::toolbarState() const {
     ToolbarState s;
+    if (flashAction_ != Action::None) s.active.push_back(flashAction_);
     // A change in the open paper menu becomes an undo step when the menu closes, which UNDO does.
     const Background& bg = doc_.pages[page_].background;
     const bool paperChanged = paperMenu_.open() && (bg.style != paperBefore_.style || bg.config != paperBefore_.config);
@@ -123,7 +125,68 @@ ToolbarState Editor::toolbarState() const {
     if (bg.type != "solid" && doc_.pages.size() < 2) s.disabled.push_back(Action::PageStyle);  // nothing to offer
     s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"}};
     s.text = !status_.empty() ? status_ : std::to_string(page_ + 1) + "/" + std::to_string(doc_.pages.size());
+    s.disabled.erase(std::remove(s.disabled.begin(), s.disabled.end(), flashAction_), s.disabled.end());
     return s;
+}
+
+void Editor::press(Action a, uint64_t now) {
+    if (a == Action::None) return;
+    const auto has = [](const std::vector<Action>& v, Action x) { return std::find(v.begin(), v.end(), x) != v.end(); };
+    const bool toolbarButton = !toolbar_.buttonRect(a).empty();
+    const bool wasDisabled = toolbarButton && has(toolbarState().disabled, a);
+    perform(a, now);
+    if (toolbarButton) {
+        if (wasDisabled || has(toolbarState().active, a)) return;
+        endFlash();
+        flashAction_ = a;
+        flashUntil_ = now + kFlashMs;
+        updateToolbar();
+        return;
+    }
+    // Elsewhere only the buttons that leave no other trace: their place, if they're still there.
+    IRect r;
+    switch (a) {
+        case Action::ZoomOut:
+        case Action::ZoomIn:
+        case Action::ZoomFit: r = panel_.buttonRect(a); break;
+        case Action::PaperMargin:
+        case Action::PaperEnds: r = paperMenu_.buttonRect(a); break;
+        case Action::Duplicate:
+        case Action::MathSum:
+        case Action::MathAverage:
+        case Action::MathMin:
+        case Action::MathMax:
+        case Action::MathCount: r = selectionButton(a); break;
+        default: return;
+    }
+    flash(r, now);
+}
+
+// Inverts a black-and-white button where it is, to be drawn again by endFlash().
+void Editor::flash(const IRect& r, uint64_t now) {
+    if (r.empty()) return;
+    endFlash();
+    const IRect c = r.intersected(canvas_.rect());
+    for (int y = c.y0; y < c.y1; ++y) {
+        uint8_t* row = canvas_.row(y);
+        for (int x = c.x0; x < c.x1; ++x) row[x] = static_cast<uint8_t>(255 - row[x]);
+    }
+    damage_.push_back({c, Refresh::UI});
+    flashRect_ = c;
+    flashUntil_ = now + kFlashMs;
+}
+
+void Editor::endFlash() {
+    flashUntil_ = 0;
+    if (flashAction_ != Action::None) {
+        flashAction_ = Action::None;
+        updateToolbar();
+    }
+    if (!flashRect_.empty()) {
+        drawChrome(flashRect_);  // the button is drawn whole again, over itself
+        damage_.push_back({flashRect_, Refresh::UI});
+        flashRect_ = {};
+    }
 }
 
 ToolPanelState Editor::panelState() const {
@@ -245,6 +308,7 @@ void Editor::changePaper(Action a, uint64_t now) {
         case Action::PaperMedium: p.spacing = 1; break;
         case Action::PaperWide: p.spacing = 2; break;
         case Action::PaperMargin: p.margin = !p.margin; break;
+        case Action::PaperEnds: p.ends = !p.ends; break;
         default: return;
     }
     const Background before = bg;
@@ -341,12 +405,12 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
     const int x = static_cast<int>(s.x), y = static_cast<int>(s.y);
     if (toolbar_.rect().contains(x, y)) {
         gesture_ = Gesture::Toolbar;
-        perform(toolbar_.hit(x, y), now);
+        press(toolbar_.hit(x, y), now);
         return;
     }
     if (panel_.covers(x, y) || paperMenu_.covers(x, y)) {
         gesture_ = Gesture::Toolbar;
-        perform(panel_.covers(x, y) ? panel_.hit(x, y) : paperMenu_.hit(x, y), now);
+        press(panel_.covers(x, y) ? panel_.hit(x, y) : paperMenu_.hit(x, y), now);
         return;
     }
     if (math_.open()) {  // its buttons, or a tap elsewhere closes it (and draws nothing)
@@ -390,7 +454,7 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         for (const OverlayButton& b : overlayButtons_) {
             if (!b.r.contains(x, y)) continue;
             gesture_ = Gesture::Toolbar;
-            perform(b.action, now);
+            press(b.action, now);
             return;
         }
         const StrokePoint p{xf_.toPageX(s.x), xf_.toPageY(s.y)};
@@ -508,14 +572,14 @@ void Editor::touchDown(int x, int y, uint64_t now) {
 void Editor::touchDown(int id, int x, int y, uint64_t now) {
     if (gesture_ != Gesture::None) return;  // the pen is busy; this is a palm
     if (fingers_.empty() && viewGesture_ == ViewGesture::None) {  // buttons answer the first finger only
-        if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y), now);
-        if (panel_.covers(x, y)) return perform(panel_.hit(x, y), now);
-        if (paperMenu_.covers(x, y)) return perform(paperMenu_.hit(x, y), now);
+        if (toolbar_.rect().contains(x, y)) return press(toolbar_.hit(x, y), now);
+        if (panel_.covers(x, y)) return press(panel_.hit(x, y), now);
+        if (paperMenu_.covers(x, y)) return press(paperMenu_.hit(x, y), now);
         if (math_.open()) return math_.covers(x, y) ? mathTap(x, y, now) : closeMath();
         for (size_t i : answers())
             if (answerInfoButton(i).grown(8).contains(x, y)) return openAnswer(i);
         for (const OverlayButton& b : overlayButtons_)
-            if (sel_.active && b.r.contains(x, y)) return perform(b.action, now);
+            if (sel_.active && b.r.contains(x, y)) return press(b.action, now);
         // Fingers don't draw, so a tap elsewhere puts the tools or the menu away.
         closePanel();
         closePaperMenu();
@@ -1353,7 +1417,8 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::PaperNarrow:
         case Action::PaperMedium:
         case Action::PaperWide:
-        case Action::PaperMargin: return changePaper(a, now);
+        case Action::PaperMargin:
+        case Action::PaperEnds: return changePaper(a, now);
         case Action::DeletePage: return deletePage(now);
         default: closePaperMenu(); break;
     }
@@ -1463,6 +1528,7 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::PaperMedium:
         case Action::PaperWide:
         case Action::PaperMargin:
+        case Action::PaperEnds:
         case Action::DeletePage:
         case Action::EditMenu:
         case Action::MathMenu:
@@ -1672,6 +1738,7 @@ void Editor::onIdle(uint64_t now) {
         if (!pendingExitShown_) pendingExitShown_ = true;
         else return finishExit(now);
     }
+    if (flashUntil_ && now >= flashUntil_) endFlash();
     const bool busy = penBusy();
     if ((gesture_ == Gesture::Drag || gesture_ == Gesture::MoveAnswer) && !dragDirty_.empty() &&
         now >= lastDragFrame_ + kDragFrameMs)
@@ -1710,6 +1777,7 @@ int Editor::msUntilIdleWork(uint64_t now) const {
     if (viewDirty_) consider(std::max<uint64_t>(lastViewFrame_ + kViewFrameMs, 1));
     if (!busy) consider(settleAt_);
     consider(statusUntil_);
+    consider(flashUntil_);
     if (modified_ && !busy && !settleAt_) consider(std::max<uint64_t>(modifiedSince_ + opts_.autosaveDelayMs, 1));
     if (!next) return -1;
     return next <= now ? 0 : static_cast<int>(std::min<uint64_t>(next - now, 1u << 30));

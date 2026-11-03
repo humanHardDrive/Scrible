@@ -18,7 +18,8 @@ enum class Action {
     EditMenu, MathMenu, MathSum, MathAverage, MathMin, MathMax, MathCount,
     Undo, Redo, Save,
     // editor: the page menu (PageStyle opens it): the current page's paper, or deleting it
-    PageStyle, PaperBlank, PaperRuled, PaperGrid, PaperNarrow, PaperMedium, PaperWide, PaperMargin, DeletePage,
+    PageStyle, PaperBlank, PaperRuled, PaperGrid, PaperNarrow, PaperMedium, PaperWide, PaperMargin,
+    PaperEnds, DeletePage,
     // both screens: pages of the notebook, or of the notebook list
     PrevPage, NextPage,
     // editor: close the notebook; library: leave the app

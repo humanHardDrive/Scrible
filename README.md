@@ -123,7 +123,7 @@ then zoom buttons. PEN, MARK and ERASE show their sizes beside the column, and e
 keeps its own. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
 Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
-rest on the page.
+rest on the page. Buttons invert for a moment when pressed, to show they were hit.
 
 - SELECT: draw a loop around strokes to select those mostly inside it. Drag inside the
   dashed frame to move them, or drag the corner handle to resize (line widths scale
@@ -166,7 +166,9 @@ rest on the page.
   redrawn properly, with a flash. Turning the page goes back to the whole page.
 - PAGE sets this page's paper: BLANK, RULED or GRID; how far apart the lines or squares
   are (NARROW / MEDIUM / WIDE, or SMALL / MEDIUM / LARGE); and for ruled paper, whether
-  it has a margin line. The page changes as you choose. Tap PAGE again, or anywhere
+  it has a margin line, and whether the top and bottom are left blank (untick BLANK TOP
+  & BOTTOM for lines all the way down; desktop Xournal++ still shows them blank). The
+  page changes as you choose. Tap PAGE again, or anywhere
   else, to close the menu; one UNDO undoes everything you changed in it. A new page
   starts with the paper of the page before it. Pages with a PDF or image background
   keep it.
