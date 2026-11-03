@@ -1551,7 +1551,7 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
 
     // EDIT: duplicate (with a finger), then delete the copies, then undo that.
     tap(e.selectionButton(Action::EditMenu));
-    CHECK(!e.selectionButton(Action::Delete).empty() && e.selectionButton(Action::MathSum).empty());
+    CHECK(!e.selectionButton(Action::Delete).empty() && e.selectionButton(Action::MathMenu).empty());
     tap(e.selectionButton(Action::Duplicate));
     CHECK(els.size() == 5 && e.selection() == (std::vector<size_t>{3, 4}));
     tap(e.selectionButton(Action::Delete));
@@ -1563,9 +1563,14 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
     // Tapping EDIT again closes its options; a new selection starts closed too.
     path(handDrawn({{250, 1400}, {950, 1400}, {950, 1600}, {250, 1600}, {250, 1410}}, 8, 1, 36));
     CHECK(e.selection() == (std::vector<size_t>{2}) && e.selectionButton(Action::Delete).empty());
-    tap(e.selectionButton(Action::EditMenu));
-    tap(e.selectionButton(Action::MathMenu));  // straight from one to the other
-    CHECK(e.selectionButton(Action::Delete).empty() && !e.selectionButton(Action::MathSum).empty());
+    tap(e.selectionButton(Action::EditMenu));  // in: EDIT leads the row, then its options
+    CHECK(!e.selectionButton(Action::Delete).empty() && e.selectionButton(Action::MathMenu).empty());
+    CHECK(e.selectionButton(Action::EditMenu).x1 <= e.selectionButton(Action::Delete).x0);
+    CHECK(e.selectionButton(Action::EditMenu).y0 == e.selectionButton(Action::Delete).y0);
+    tap(e.selectionButton(Action::EditMenu));  // and back out
+    CHECK(e.selectionButton(Action::Delete).empty() && !e.selectionButton(Action::MathMenu).empty());
+    tap(e.selectionButton(Action::MathMenu));
+    CHECK(!e.selectionButton(Action::MathSum).empty() && e.selectionButton(Action::EditMenu).empty());
     tap(e.selectionButton(Action::MathMenu));
     CHECK(e.selectionButton(Action::MathSum).empty());
 

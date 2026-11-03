@@ -669,50 +669,45 @@ IRect Editor::selectionButton(Action a) const {
     return {};
 }
 
-// The selection's menu: EDIT and MATH, and below them the options of the one that's
-// open. Above the frame if there's room, else below; on the page either way, and not
-// under the tools tab. The place is the same whichever is open (room is kept for the
-// options), so opening one only adds black and white.
+// The selection's menu, one row: EDIT and MATH, or, once one is picked, that one
+// (with an up arrow, to go back) followed by its options. Above the frame if there's
+// room, else below; on the page either way, and not under the tools tab. It stays in
+// one place, on a white bar, so going into a menu (a longer row) is black and white
+// over black and white.
 void Editor::layoutOverlay() {
     overlayButtons_.clear();
     const IRect f = selectionFrame();
     using Row = std::vector<std::pair<Action, std::string>>;
     const Row menus = {{Action::EditMenu, "EDIT"}, {Action::MathMenu, "MATH"}};
-    const Row edit = {{Action::Delete, "DELETE"}, {Action::Duplicate, "DUPLICATE"}};
-    const Row math = {{Action::MathSum, "SUM"},
-                      {Action::MathAverage, "AVERAGE"},
-                      {Action::MathMin, "MIN"},
-                      {Action::MathMax, "MAX"},
-                      {Action::MathCount, "COUNT"}};
-    std::vector<Row> rows = {menus};
-    if (selectionMenu_ == SelectionMenu::Edit) rows.push_back(edit);
-    if (selectionMenu_ == SelectionMenu::Math) rows.push_back(math);
-    const int h = 96, gap = 12;
-    const int height = 2 * (h + gap) - gap;
+    const Row edit = {{Action::EditMenu, "EDIT"}, {Action::Delete, "DELETE"}, {Action::Duplicate, "DUPLICATE"}};
+    const Row math = {{Action::MathMenu, "MATH"}, {Action::MathSum, "SUM"},    {Action::MathAverage, "AVERAGE"},
+                      {Action::MathMin, "MIN"},   {Action::MathMax, "MAX"},    {Action::MathCount, "COUNT"}};
+    const int h = 96, gap = 12, arrow = 32;  // room for the up arrow
+    auto buttonWidth = [&](const Row& row, size_t k) {
+        const int w = Canvas::textWidth(row[k].second, kOverlayScale) + 48;
+        return k == 0 && &row != &menus ? w + arrow : w;
+    };
     int total = 0;
     for (const Row* row : {&menus, &edit, &math}) {
         int w = -gap;
-        for (const auto& [a, label] : *row) w += Canvas::textWidth(label, kOverlayScale) + 48 + gap;
+        for (size_t k = 0; k < row->size(); ++k) w += buttonWidth(*row, k) + gap;
         total = std::max(total, w);
     }
-    int y0 = f.y0 - 20 - height;
-    if (y0 < pageArea_.y0 + 10) y0 = std::min(f.y1 + kHandle + 20, pageArea_.y1 - 10 - height);
+    const Row& row = selectionMenu_ == SelectionMenu::Edit ? edit : selectionMenu_ == SelectionMenu::Math ? math : menus;
+    int y0 = f.y0 - 20 - h;
+    if (y0 < pageArea_.y0 + 10) y0 = std::min(f.y1 + kHandle + 20, pageArea_.y1 - 10 - h);
     const IRect tab = panel_.tabRect();
-    const int minX = (y0 < tab.y1 && y0 + height > tab.y0 ? tab.x1 : pageArea_.x0) + 10;
+    const int minX = (y0 < tab.y1 && y0 + h > tab.y0 ? tab.x1 : pageArea_.x0) + 10;
     const int x0 = std::clamp(f.x0, minX, std::max(minX, pageArea_.x1 - 10 - total));
-    int y = y0;
-    for (const auto& row : rows) {
-        int x = x0;
-        for (const auto& [a, label] : row) {
-            const int w = Canvas::textWidth(label, kOverlayScale) + 48;
-            overlayButtons_.push_back({a, label, {x, y, x + w, y + h}});
-            x += w + gap;
-        }
-        y += h + gap;
+    int x = x0;
+    for (size_t k = 0; k < row.size(); ++k) {
+        const int w = buttonWidth(row, k);
+        overlayButtons_.push_back({row[k].first, row[k].second, {x, y0, x + w, y0 + h}});
+        x += w + gap;
     }
 }
 
-// Opens one of the selection's menus, or closes it when it's open already.
+// Goes into one of the selection's menus, or back out of it.
 void Editor::showSelectionMenu(SelectionMenu m) {
     if (!sel_.active) return;
     const IRect before = overlayArea();
@@ -720,8 +715,8 @@ void Editor::showSelectionMenu(SelectionMenu m) {
     selectionMenu_ = selectionMenu_ == m ? SelectionMenu::None : m;
     layoutOverlay();
     const IRect after = overlayArea();
-    // Options only added: black and white over the page, so DU. Options taken away
-    // (closed, or the other menu's instead) uncover the page, grays and all.
+    // Into a menu: a longer row over the shorter one, black and white, so DU. Back
+    // out: the shorter row uncovers the page, grays and all.
     if (!wasClosed) return repaint(before.united(after), Refresh::Content);
     drawOverlay(after);
     damage_.push_back({after, Refresh::UI});
@@ -796,15 +791,28 @@ void Editor::drawOverlay(const IRect& clip) {
     fill(h, 0);
     fill(h.grown(-8), 255);
     fill(h.grown(-14), 0);
+    if (!overlayButtons_.empty()) {
+        // The menu's white bar, so the gaps between its buttons hide the page too.
+        fill({overlayButtons_.front().r.x0, overlayButtons_.front().r.y0, overlayButtons_.back().r.x1,
+              overlayButtons_.back().r.y1},
+             255);
+    }
     for (const OverlayButton& b : overlayButtons_) {
-        // The open menu's button is inverted.
+        // The menu that's open leads its row, inverted, with an arrow back up.
         const bool open = (b.action == Action::EditMenu && selectionMenu_ == SelectionMenu::Edit) ||
                           (b.action == Action::MathMenu && selectionMenu_ == SelectionMenu::Math);
         fill(b.r, 0);
         if (!open) fill(b.r.grown(-3), 255);
-        const int tx = b.r.x0 + (b.r.width() - Canvas::textWidth(b.label, kOverlayScale)) / 2;
+        const uint8_t ink = open ? 255 : 0;
+        int tx = b.r.x0 + (b.r.width() - Canvas::textWidth(b.label, kOverlayScale)) / 2;
         const int ty = b.r.y0 + (b.r.height() - 8 * kOverlayScale) / 2;
-        canvas_.drawText(tx, ty, b.label, kOverlayScale, open ? 255 : 0, b.r.intersected(clip));
+        if (open) {
+            const int ax = b.r.x0 + 34, top = ty;
+            for (int j = 0; j < 14; ++j) fill({ax - j * 10 / 14, top + j, ax + j * 10 / 14 + 1, top + j + 1}, ink);
+            fill({ax - 3, top + 14, ax + 4, top + 24}, ink);
+            tx += 16;
+        }
+        canvas_.drawText(tx, ty, b.label, kOverlayScale, ink, b.r.intersected(clip));
     }
 }
 

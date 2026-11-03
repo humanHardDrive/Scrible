@@ -124,8 +124,9 @@ rest on the page.
 
 - SELECT: draw a loop around strokes to select those mostly inside it. Drag inside the
   dashed frame to move them, or drag the corner handle to resize (line widths scale
-  too). The selection's menu has EDIT and MATH; tap one to show its options, and again
-  to hide them. A tap elsewhere lets go of the selection. Each change is one UNDO. It
+  too). The selection's menu has EDIT and MATH. Tapping one puts it at the start of
+  the row, with an up arrow, followed by its options; tap it again to go back. A tap
+  elsewhere lets go of the selection. Each change is one UNDO. It
   works on the top layer's strokes; text and images from desktop Xournal++ can't be
   selected yet.
 - EDIT: DELETE and DUPLICATE.
