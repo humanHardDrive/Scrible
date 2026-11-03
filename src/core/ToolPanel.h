@@ -20,7 +20,7 @@ struct ToolPanelState {
 };
 
 // The drawing tools, kept out of the way along the left edge of the page: a small
-// tab with an arrow, which opens a column of PEN, SHAPE, LASSO, MARK and ERASE. Picking the pen, highlighter or eraser shows its options beside the
+// tab with an arrow, which opens a column of PEN, SHAPE, SELECT, MARK and ERASE. Picking the pen, highlighter or eraser shows its options beside the
 // column (sizes; for the eraser also partial or whole strokes). Strictly black and
 // white, like the toolbar, so it can be shown with the fast DU waveform.
 class ToolPanel {

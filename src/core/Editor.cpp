@@ -619,6 +619,7 @@ void Editor::finishLasso() {
     lasso_.clear();
     lassoArea_ = {};
     if (!picked.empty()) {
+        selectionMenu_ = SelectionMenu::None;  // a new selection starts with just EDIT and MATH
         select(std::move(picked));
         area = area.united(overlayArea());
     }
@@ -668,26 +669,30 @@ IRect Editor::selectionButton(Action a) const {
     return {};
 }
 
-// The selection's menu: what to do with the strokes, then the math on the numbers
-// written in them. Above the frame if there's room, else below; on the page either
-// way, and not under the tools tab.
+// The selection's menu: EDIT and MATH, and below them the options of the one that's
+// open. Above the frame if there's room, else below; on the page either way, and not
+// under the tools tab. The place is the same whichever is open (room is kept for the
+// options), so opening one only adds black and white.
 void Editor::layoutOverlay() {
     overlayButtons_.clear();
     const IRect f = selectionFrame();
-    const std::vector<std::vector<std::pair<Action, std::string>>> rows = {
-        {{Action::Delete, "DELETE"}, {Action::Duplicate, "DUPLICATE"}, {Action::Cancel, "DONE"}},
-        {{Action::MathSum, "SUM"},
-         {Action::MathAverage, "AVERAGE"},
-         {Action::MathMin, "MIN"},
-         {Action::MathMax, "MAX"},
-         {Action::MathCount, "COUNT"}},
-    };
+    using Row = std::vector<std::pair<Action, std::string>>;
+    const Row menus = {{Action::EditMenu, "EDIT"}, {Action::MathMenu, "MATH"}};
+    const Row edit = {{Action::Delete, "DELETE"}, {Action::Duplicate, "DUPLICATE"}};
+    const Row math = {{Action::MathSum, "SUM"},
+                      {Action::MathAverage, "AVERAGE"},
+                      {Action::MathMin, "MIN"},
+                      {Action::MathMax, "MAX"},
+                      {Action::MathCount, "COUNT"}};
+    std::vector<Row> rows = {menus};
+    if (selectionMenu_ == SelectionMenu::Edit) rows.push_back(edit);
+    if (selectionMenu_ == SelectionMenu::Math) rows.push_back(math);
     const int h = 96, gap = 12;
-    const int height = static_cast<int>(rows.size()) * (h + gap) - gap;
+    const int height = 2 * (h + gap) - gap;
     int total = 0;
-    for (const auto& row : rows) {
+    for (const Row* row : {&menus, &edit, &math}) {
         int w = -gap;
-        for (const auto& [a, label] : row) w += Canvas::textWidth(label, kOverlayScale) + 48 + gap;
+        for (const auto& [a, label] : *row) w += Canvas::textWidth(label, kOverlayScale) + 48 + gap;
         total = std::max(total, w);
     }
     int y0 = f.y0 - 20 - height;
@@ -705,6 +710,21 @@ void Editor::layoutOverlay() {
         }
         y += h + gap;
     }
+}
+
+// Opens one of the selection's menus, or closes it when it's open already.
+void Editor::showSelectionMenu(SelectionMenu m) {
+    if (!sel_.active) return;
+    const IRect before = overlayArea();
+    const bool wasClosed = selectionMenu_ == SelectionMenu::None;
+    selectionMenu_ = selectionMenu_ == m ? SelectionMenu::None : m;
+    layoutOverlay();
+    const IRect after = overlayArea();
+    // Options only added: black and white over the page, so DU. Options taken away
+    // (closed, or the other menu's instead) uncover the page, grays and all.
+    if (!wasClosed) return repaint(before.united(after), Refresh::Content);
+    drawOverlay(after);
+    damage_.push_back({after, Refresh::UI});
 }
 
 // Reads the numbers written in the selection and shows the answer, with what was read.
@@ -777,11 +797,14 @@ void Editor::drawOverlay(const IRect& clip) {
     fill(h.grown(-8), 255);
     fill(h.grown(-14), 0);
     for (const OverlayButton& b : overlayButtons_) {
+        // The open menu's button is inverted.
+        const bool open = (b.action == Action::EditMenu && selectionMenu_ == SelectionMenu::Edit) ||
+                          (b.action == Action::MathMenu && selectionMenu_ == SelectionMenu::Math);
         fill(b.r, 0);
-        fill(b.r.grown(-3), 255);
+        if (!open) fill(b.r.grown(-3), 255);
         const int tx = b.r.x0 + (b.r.width() - Canvas::textWidth(b.label, kOverlayScale)) / 2;
         const int ty = b.r.y0 + (b.r.height() - 8 * kOverlayScale) / 2;
-        canvas_.drawText(tx, ty, b.label, kOverlayScale, 0, b.r.intersected(clip));
+        canvas_.drawText(tx, ty, b.label, kOverlayScale, open ? 255 : 0, b.r.intersected(clip));
     }
 }
 
@@ -894,6 +917,10 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::MathCount:
             closeMath();
             return openMath(a);
+        case Action::EditMenu:
+        case Action::MathMenu:
+            closeMath();
+            return showSelectionMenu(a == Action::EditMenu ? SelectionMenu::Edit : SelectionMenu::Math);
         default: closeMath(); break;
     }
 
@@ -1004,6 +1031,8 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::PaperWide:
         case Action::PaperMargin:
         case Action::DeletePage:
+        case Action::EditMenu:
+        case Action::MathMenu:
         case Action::MathSum:
         case Action::MathAverage:
         case Action::MathMin:

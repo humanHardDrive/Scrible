@@ -185,6 +185,8 @@ private:
     void changePaper(Action a, uint64_t now);
     void closePaperMenu();
     void deletePage(uint64_t now);
+    enum class SelectionMenu { None, Edit, Math };
+    void showSelectionMenu(SelectionMenu m);
     void openMath(Action op);
     void mathTap(int x, int y);
     void closeMath();
@@ -235,6 +237,7 @@ private:
     };
     Selection sel_;
     std::vector<OverlayButton> overlayButtons_;
+    SelectionMenu selectionMenu_ = SelectionMenu::None;  // which of EDIT and MATH is open
     std::vector<StrokePoint> lasso_;  // the loop being drawn (page coordinates)
     IRect lassoArea_;
     double lassoDots_ = 0;  // distance since the last dot of the dotted outline

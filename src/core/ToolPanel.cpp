@@ -24,7 +24,7 @@ const char* label(Action a) {
     switch (a) {
         case Action::Pen: return "PEN";
         case Action::Shapes: return "SHAPE";
-        case Action::Lasso: return "LASSO";
+        case Action::Lasso: return "SELECT";
         case Action::Highlighter: return "MARK";
         case Action::Eraser: return "ERASE";
         case Action::ErasePartial: return "PARTIAL";

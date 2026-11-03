@@ -14,8 +14,8 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
-- Lasso selection: move, resize, duplicate and delete groups of strokes, or read the
-  numbers written in them and get their sum, average, minimum, maximum or count
+- Selection: move, resize, duplicate and delete groups of strokes, or read the numbers
+  written in them and get their sum, average, minimum, maximum or count
 - Paper for each page: blank, ruled (three spacings, with or without a margin line) or
   grid (three sizes), stored the way Xournal++ stores it
 - Shape recognition, as in Xournal: lines, triangles, quadrilaterals, rectangles,
@@ -116,20 +116,22 @@ In the list:
 
 In a notebook the toolbar along the top has UNDO / REDO, PAGE, `<` page `>`, SAVE,
 BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
-page. Tap it to open a column of PEN, SHAPE, LASSO, MARK (highlighter) and ERASE. PEN,
+page. Tap it to open a column of PEN, SHAPE, SELECT, MARK (highlighter) and ERASE. PEN,
 MARK and ERASE show their sizes beside the column, and each keeps its own. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
 Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
 rest on the page.
 
-- LASSO: draw a loop around strokes to select those mostly inside it. Drag inside the
+- SELECT: draw a loop around strokes to select those mostly inside it. Drag inside the
   dashed frame to move them, or drag the corner handle to resize (line widths scale
-  too). DELETE and DUPLICATE act on the selection, and DONE or a tap elsewhere lets go.
-  Each change is one UNDO. It works on the top layer's strokes; text and images from
-  desktop Xournal++ can't be selected yet.
-- The selection's menu also has SUM, AVERAGE, MIN, MAX and COUNT. Select a list of
-  numbers you've written (one per line, or several on a line with a wide gap between),
-  and Scrible reads them and shows the answer, above the numbers as it read them. It
+  too). The selection's menu has EDIT and MATH; tap one to show its options, and again
+  to hide them. A tap elsewhere lets go of the selection. Each change is one UNDO. It
+  works on the top layer's strokes; text and images from desktop Xournal++ can't be
+  selected yet.
+- EDIT: DELETE and DUPLICATE.
+- MATH: SUM, AVERAGE, MIN, MAX and COUNT. Select a list of numbers you've written (one
+  per line, or several on a line with a wide gap between; on any paper, blank too), and
+  Scrible reads them and shows the answer, above the numbers as it read them. It
   knows digits, decimal points, minus signs and thousands commas. Tap a character that
   was misread to correct it; corrected digits become examples of your handwriting
   (kept in `notebooks/.scrible-digits`), so it reads you better as you go. Reading

@@ -1520,7 +1520,9 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
     e.perform(Action::Lasso, t += 10);
     path(handDrawn({{250, 520}, {850, 520}, {850, 720}, {250, 720}, {250, 530}}, 8, 1, 34));
     CHECK(e.selection() == (std::vector<size_t>{0, 1}));
-    CHECK(!e.selectionFrame().empty() && !e.selectionButton(Action::Delete).empty());
+    // Its menu: EDIT and MATH, whose options show once one is opened.
+    CHECK(!e.selectionFrame().empty() && !e.selectionButton(Action::EditMenu).empty());
+    CHECK(!e.selectionButton(Action::MathMenu).empty() && e.selectionButton(Action::Delete).empty());
 
     // Drag inside the frame: moves them.
     const IRect frame = center(e.selectionFrame());
@@ -1547,7 +1549,9 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
     CHECK(std::get<Stroke>(els[0]).width > 1.7 * widthBefore);
     CHECK(std::get<Stroke>(els[0]).bounds().x1 - std::get<Stroke>(els[0]).bounds().x0 > 1.7 * (before.x1 - before.x0));
 
-    // Duplicate (with a finger), then delete the copies, then undo that.
+    // EDIT: duplicate (with a finger), then delete the copies, then undo that.
+    tap(e.selectionButton(Action::EditMenu));
+    CHECK(!e.selectionButton(Action::Delete).empty() && e.selectionButton(Action::MathSum).empty());
     tap(e.selectionButton(Action::Duplicate));
     CHECK(els.size() == 5 && e.selection() == (std::vector<size_t>{3, 4}));
     tap(e.selectionButton(Action::Delete));
@@ -1556,13 +1560,16 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
     flush();
     CHECK(els.size() == 5);
 
-    // DONE, or a tap elsewhere, lets go of the selection.
+    // Tapping EDIT again closes its options; a new selection starts closed too.
     path(handDrawn({{250, 1400}, {950, 1400}, {950, 1600}, {250, 1600}, {250, 1410}}, 8, 1, 36));
-    CHECK(e.selection() == (std::vector<size_t>{2}));
-    tap(e.selectionButton(Action::Cancel));
-    CHECK(e.selection().empty());
-    path(handDrawn({{250, 1400}, {950, 1400}, {950, 1600}, {250, 1600}, {250, 1410}}, 8, 1, 37));
-    CHECK(!e.selection().empty());
+    CHECK(e.selection() == (std::vector<size_t>{2}) && e.selectionButton(Action::Delete).empty());
+    tap(e.selectionButton(Action::EditMenu));
+    tap(e.selectionButton(Action::MathMenu));  // straight from one to the other
+    CHECK(e.selectionButton(Action::Delete).empty() && !e.selectionButton(Action::MathSum).empty());
+    tap(e.selectionButton(Action::MathMenu));
+    CHECK(e.selectionButton(Action::MathSum).empty());
+
+    // A tap elsewhere lets go of the selection.
     e.penDown({1500, 2200, 0.5, false}, t += 10);
     e.penUp(t += 10);
     flush();
@@ -1693,8 +1700,8 @@ TEST(tool_panel_opens_picks_and_puts_itself_away) {
     tap(Action::Lasso);
     path({{260, 280}, {640, 280}, {640, 360}, {260, 360}, {262, 285}});
     CHECK(e.selection().size() == 1);
-    const IRect del = e.selectionButton(Action::Delete);
-    CHECK(!del.empty() && (del.x0 >= tab.x1 || del.y0 >= tab.y1 || del.y1 <= tab.y0));
+    const IRect menu = e.selectionButton(Action::EditMenu);
+    CHECK(!menu.empty() && (menu.x0 >= tab.x1 || menu.y0 >= tab.y1 || menu.y1 <= tab.y0));
 
     // Through all of it, the fast refreshes left nothing stale on the panel.
     e.onIdle(t += 1000);
@@ -2321,10 +2328,11 @@ TEST(selection_math_reads_and_can_be_corrected) {
     e.onIdle(t += 1000);
     flush();
 
-    // Lasso it; SUM is in the selection's menu, with the other math.
+    // Select it; SUM is under MATH in the selection's menu, with the other math.
     e.perform(Action::Lasso, t += 10);
     pen({{600, 850}, {1200, 850}, {1200, 1360}, {600, 1360}, {600, 860}});
     CHECK(e.selection().size() == 9);  // a 5 takes two strokes
+    tap(e.selectionButton(Action::MathMenu));
     for (Action a : {Action::MathSum, Action::MathAverage, Action::MathMin, Action::MathMax, Action::MathCount})
         CHECK(!e.selectionButton(a).empty());
     tap(e.selectionButton(Action::MathSum));
