@@ -43,6 +43,7 @@ struct PenEvent {
 
 struct TouchEvent {
     enum class Type { Down, Move, Up } type;
+    int id;  // which finger: its multitouch slot
     double x, y;
 };
 
@@ -84,6 +85,10 @@ public:
     void read(std::vector<PenEvent>& out);
     // Where pressure has come from so far: "pen", "pressure source", or "none" (fixed at 0.5).
     const char* pressureOrigin() const;
+    // The pen is close enough to be sensed (hovering) or on the screen. hoverSeen()
+    // says whether the device ever reported hovering, i.e. whether near() is useful.
+    bool near() const { return inRange_ || rubber_ || touching_; }
+    bool hoverSeen() const { return hoverSeen_; }
 
 private:
     void resync();
@@ -91,7 +96,7 @@ private:
 
     AxisRange pressure_;
     int rawX_ = 0, rawY_ = 0, rawP_ = 0;
-    bool touching_ = false, rubber_ = false, button_ = false;
+    bool touching_ = false, rubber_ = false, button_ = false, inRange_ = false, hoverSeen_ = false;
     bool down_ = false, eraser_ = false, buttonAtDown_ = false, dropped_ = false;
     bool ownPressureSeen_ = false;
 
@@ -114,8 +119,8 @@ private:
     };
     static constexpr int kSlots = 16;
     Slot slots_[kSlots];
+    bool down_[kSlots] = {};  // a Down was reported for the finger in this slot, and no Up yet
     int cur_ = 0;
-    int primary_ = -1;  // only the first finger is tracked
     bool dropped_ = false;
 };
 

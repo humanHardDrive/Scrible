@@ -12,7 +12,8 @@ enum class Action {
     None,
     // editor: the tools panel (Tools opens it; sizes apply to the current tool), and
     // Delete/Duplicate/Cancel act on a lasso selection
-    Tools, Pen, Shapes, Lasso, Highlighter, Eraser, SizeFine, SizeMedium, SizeThick, ErasePartial, EraseWhole,
+    Tools, Pen, Shapes, Lasso, Highlighter, Eraser, Pan, ZoomOut, ZoomIn, ZoomFit,
+    SizeFine, SizeMedium, SizeThick, ErasePartial, EraseWhole,
     Undo, Redo, Save,
     // editor: the page menu (PageStyle opens it): the current page's paper, or deleting it
     PageStyle, PaperBlank, PaperRuled, PaperGrid, PaperNarrow, PaperMedium, PaperWide, PaperMargin, DeletePage,

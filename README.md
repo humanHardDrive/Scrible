@@ -24,6 +24,7 @@ and reads the pen from evdev, sharing Xournal++'s file format.
   pen's eraser end) that either cuts away just the ink it passes over, like Xournal++'s
   standard eraser, or removes whole strokes
 - Drawing tools tucked into a panel at the edge of the page, out of the way until tapped
+- Zoom up to 400%: pinch with two fingers, or use the panel's buttons and PAN tool
 - Three sizes per tool, undo/redo, multiple pages (`>` on the last page adds one;
   PAGE deletes one)
 - Opens `.xopp` and `.xoj` files from Xournal++ and the original Xournal. Anything it
@@ -53,6 +54,7 @@ Pass a folder to list the notebooks in it, or a `.xopp` file to open just that o
 Left mouse button draws, right button erases. A drawing tablet gives real pressure.
 Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z redo, Cmd/Ctrl+S save, P/H/E/L switch tools,
 R switches shape recognition, 1/2/3 set the tool's size, Delete removes the selection,
+the wheel or trackpad moves the page and zooms with Cmd/Ctrl,
 ←/→ change pages, N new notebook (in the list), Enter confirms, Esc goes back or quits.
 `--no-eink-sim` shows antialiased ink and no e-ink refresh artifacts.
 
@@ -115,8 +117,9 @@ In the list:
 
 In a notebook the toolbar along the top has UNDO / REDO, PAGE, `<` page `>`, SAVE,
 BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
-page. Tap it to open a column of PEN, SHAPE, LASSO, MARK (highlighter) and ERASE. PEN,
-MARK and ERASE show their sizes beside the column, and each keeps its own. Picking one
+page. Tap it to open a column of PEN, SHAPE, LASSO, MARK (highlighter), ERASE and PAN,
+then zoom buttons. PEN, MARK and ERASE show their sizes beside the column, and each
+keeps its own. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
 Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
 rest on the page.
@@ -139,6 +142,12 @@ rest on the page.
 - Holding the pen's side button highlights, whichever tool is selected, as in the
   Kindle's own notebooks. It uses MARK's size.
 - These choices and each tool's size are remembered.
+- Zooming: pinch with two fingers to zoom (up to 400%) and move the page, with the pen
+  lifted away from the screen, since a hand holding the pen near the page is taken for
+  a resting palm. Or use the panel: `-` and `+` zoom in steps, FIT goes back to the
+  whole page, and with PAN selected, dragging with the pen or a finger moves the page.
+  While the page moves you see a quick black-and-white preview; when you let go it's
+  redrawn properly, with a flash. Turning the page goes back to the whole page.
 - PAGE sets this page's paper: BLANK, RULED or GRID; how far apart the lines or squares
   are (NARROW / MEDIUM / WIDE, or SMALL / MEDIUM / LARGE); and for ruled paper, whether
   it has a margin line. The page changes as you choose. Tap PAGE again, or anywhere

@@ -210,6 +210,7 @@ void PenInput::resync() {
     if (ioctl(fd_, EVIOCGKEY(sizeof keys), keys) >= 0) {
         touching_ = testBit(keys, BTN_TOUCH);
         rubber_ = testBit(keys, BTN_TOOL_RUBBER);
+        inRange_ = testBit(keys, BTN_TOOL_PEN);
         button_ = testBit(keys, BTN_STYLUS) || testBit(keys, BTN_STYLUS2);
     }
     input_absinfo ai{};
@@ -231,6 +232,10 @@ void PenInput::read(std::vector<PenEvent>& out) {
             case EV_KEY:
                 if (e.code == BTN_TOUCH) touching_ = e.value != 0;
                 else if (e.code == BTN_TOOL_RUBBER) rubber_ = e.value != 0;
+                else if (e.code == BTN_TOOL_PEN) {
+                    inRange_ = e.value != 0;
+                    if (inRange_ && !touching_) hoverSeen_ = true;
+                }
                 else if (e.code == BTN_STYLUS || e.code == BTN_STYLUS2) button_ = e.value != 0;
                 return;
             case EV_ABS:
@@ -281,10 +286,14 @@ bool TouchInput::open(const std::string& path, int screenWidth, int screenHeight
 void TouchInput::read(std::vector<TouchEvent>& out) {
     readEvents(fd_, [&](const input_event& e) {
         if (dropped_) {
-            // Simplest safe recovery: forget all contacts.
+            // Simplest safe recovery: lift every finger.
             if (e.type == EV_SYN && e.code == SYN_REPORT) {
                 dropped_ = false;
-                for (Slot& s : slots_) s.id = -1;
+                for (int i = 0; i < kSlots; ++i) {
+                    slots_[i].id = -1;
+                    if (down_[i]) out.push_back({TouchEvent::Type::Up, i, 0, 0});
+                    down_[i] = false;
+                }
             }
             return;
         }
@@ -307,24 +316,14 @@ void TouchInput::read(std::vector<TouchEvent>& out) {
         }
         if (e.code != SYN_REPORT) return;
 
-        double x, y;
-        if (primary_ >= 0 && slots_[primary_].id < 0) {
-            toScreen(slots_[primary_].x, slots_[primary_].y, x, y);
-            out.push_back({TouchEvent::Type::Up, x, y});
-            primary_ = -1;
-        }
-        if (primary_ < 0) {
-            for (int i = 0; i < kSlots; ++i) {
-                if (slots_[i].id >= 0 && !slots_[i].pen) {
-                    primary_ = i;
-                    toScreen(slots_[i].x, slots_[i].y, x, y);
-                    out.push_back({TouchEvent::Type::Down, x, y});
-                    break;
-                }
-            }
-        } else {
-            toScreen(slots_[primary_].x, slots_[primary_].y, x, y);
-            out.push_back({TouchEvent::Type::Move, x, y});
+        // Every finger (not the pen) that went down, moved or lifted since the last report.
+        for (int i = 0; i < kSlots; ++i) {
+            const bool finger = slots_[i].id >= 0 && !slots_[i].pen;
+            double x, y;
+            toScreen(slots_[i].x, slots_[i].y, x, y);
+            if (finger) out.push_back({down_[i] ? TouchEvent::Type::Move : TouchEvent::Type::Down, i, x, y});
+            else if (down_[i]) out.push_back({TouchEvent::Type::Up, i, x, y});
+            down_[i] = finger;
         }
     });
 }

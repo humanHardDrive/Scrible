@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 
@@ -51,6 +52,7 @@ bool App::openNotebook(const std::string& path, std::string& error) {
                 if (settings_->get(kSizeKeys[k]) == kSizeNames[i]) eo.sizes[k] = static_cast<ToolSize>(i);
     }
     editor_ = std::make_unique<Editor>(width_, height_, std::move(doc), path, eo);
+    editor_->setPenNear(penNear_);
     return true;
 }
 
@@ -124,6 +126,38 @@ void App::touchDown(int x, int y, uint64_t now) {
     } else if (!deferred_) {
         handle(library_->tap(x, y), now);
     }
+}
+
+void App::touchDown(int id, int x, int y, uint64_t now) {
+    ++fingers_;
+    if (editor_) {
+        editor_->touchDown(id, x, y, now);
+        afterEditorInput();
+    } else if (!deferred_ && fingers_ == 1) {
+        handle(library_->tap(x, y), now);
+    }
+}
+
+void App::touchMove(int id, int x, int y, uint64_t now) {
+    if (editor_) editor_->touchMove(id, x, y, now);
+}
+
+void App::touchUp(int id, uint64_t now) {
+    fingers_ = std::max(0, fingers_ - 1);
+    if (editor_) editor_->touchUp(id, now);
+}
+
+void App::setPenNear(bool near) {
+    penNear_ = near;
+    if (editor_) editor_->setPenNear(near);
+}
+
+void App::zoomBy(double factor, double x, double y, uint64_t now) {
+    if (editor_) editor_->zoomBy(factor, x, y, now);
+}
+
+void App::panBy(double dx, double dy, uint64_t now) {
+    if (editor_) editor_->panBy(dx, dy, now);
 }
 
 void App::perform(Action a, uint64_t now) {

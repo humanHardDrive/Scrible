@@ -1,5 +1,7 @@
 #include "Editor.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 
@@ -15,6 +17,18 @@ constexpr uint8_t kOffPageGray = 220;
 constexpr double kMinPointDistPx = 0.75;  // closer samples are dropped
 constexpr size_t kMaxUndo = 1000;
 constexpr uint64_t kDragFrameMs = 50;  // at most this often while moving a selection (e-ink can't keep up)
+constexpr uint64_t kViewFrameMs = 120;  // ...or the whole page, while zooming and panning
+constexpr double kMaxZoom = 4;
+constexpr double kZoomSteps[] = {1, 1.5, 2, 3, 4};  // the zoom buttons'
+constexpr int kTapId = -1;                         // the finger of touchDown(x, y)
+
+bool sameView(const PageTransform& a, const PageTransform& b) {
+    return a.scale == b.scale && a.offsetX == b.offsetX && a.offsetY == b.offsetY;
+}
+
+double msSince(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+}
 constexpr int kFramePad = 14, kHandle = 24, kOverlayScale = 3;
 
 // Preset widths (points) of the original Xournal, indexed by ToolSize.
@@ -99,12 +113,12 @@ ToolbarState Editor::toolbarState() const {
 }
 
 ToolPanelState Editor::panelState() const {
-    static constexpr Action tools[] = {Action::Pen, Action::Highlighter, Action::Eraser, Action::Lasso};
+    static constexpr Action tools[] = {Action::Pen, Action::Highlighter, Action::Eraser, Action::Lasso, Action::Pan};
     ToolPanelState s;
     s.tool = tools[static_cast<int>(tool_)];
     s.shapes = shapes_;
     s.eraseWhole = eraseWhole_;
-    if (tool_ != ToolKind::Lasso) {
+    if (tool_ != ToolKind::Lasso && tool_ != ToolKind::Pan) {
         const double* widths = tool_ == ToolKind::Pen           ? kPenWidths
                                : tool_ == ToolKind::Highlighter ? kHighlighterWidths
                                                                 : kEraserWidths;
@@ -319,9 +333,20 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         perform(panel_.covers(x, y) ? panel_.hit(x, y) : paperMenu_.hit(x, y), now);
         return;
     }
+    if (viewGesture_ != ViewGesture::None) {  // the pen takes over from the fingers
+        viewGesture_ = ViewGesture::None;
+        endViewGesture(now);
+    }
     // Writing beside the open panel or menu puts it away, once the pen lifts:
     // repainting what it covers needs the slow waveform, which mustn't delay the ink.
     closePanelOnUp_ = panel_.open() || paperMenu_.open();
+    if (tool_ == ToolKind::Pan && !s.eraser && !s.button) {
+        if (!pageArea_.contains(x, y)) return;
+        gesture_ = Gesture::Pan;
+        beginViewGesture();
+        viewAnchor_ = {xf_.toPageX(s.x), xf_.toPageY(s.y)};
+        return;
+    }
     if (sel_.active) {
         for (const OverlayButton& b : overlayButtons_) {
             if (!b.r.contains(x, y)) continue;
@@ -378,6 +403,11 @@ void Editor::penMove(const PenSample& s, uint64_t now) {
         eraseAt(s, now);
         return;
     }
+    if (gesture_ == Gesture::Pan) {
+        moveViewTo(zoom_, viewAnchor_, s.x, s.y);
+        if (now >= lastViewFrame_ + kViewFrameMs) viewFrame(now);
+        return;
+    }
     const StrokePoint p{xf_.toPageX(s.x), xf_.toPageY(s.y)};
     if (gesture_ == Gesture::Lasso) return lassoTo(p);
     if (gesture_ == Gesture::Drag) {
@@ -408,6 +438,8 @@ void Editor::penUp(uint64_t now) {
         finishLasso();
     } else if (gesture_ == Gesture::Drag) {
         finishDrag(now);
+    } else if (gesture_ == Gesture::Pan) {
+        endViewGesture(now);
     } else if (gesture_ == Gesture::Erase && !pendingErase_.edits.empty()) {
         pushUndo(std::move(pendingErase_));
         markModified(now);
@@ -421,15 +453,178 @@ void Editor::penUp(uint64_t now) {
 }
 
 void Editor::touchDown(int x, int y, uint64_t now) {
+    touchDown(kTapId, x, y, now);
+    touchUp(kTapId, now);
+}
+
+void Editor::touchDown(int id, int x, int y, uint64_t now) {
     if (gesture_ != Gesture::None) return;  // the pen is busy; this is a palm
-    if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y), now);
-    if (panel_.covers(x, y)) return perform(panel_.hit(x, y), now);
-    if (paperMenu_.covers(x, y)) return perform(paperMenu_.hit(x, y), now);
-    for (const OverlayButton& b : overlayButtons_)
-        if (sel_.active && b.r.contains(x, y)) return perform(b.action, now);
-    // Fingers don't draw, so a tap elsewhere just puts the tools or the menu away.
+    if (fingers_.empty() && viewGesture_ == ViewGesture::None) {  // buttons answer the first finger only
+        if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y), now);
+        if (panel_.covers(x, y)) return perform(panel_.hit(x, y), now);
+        if (paperMenu_.covers(x, y)) return perform(paperMenu_.hit(x, y), now);
+        for (const OverlayButton& b : overlayButtons_)
+            if (sel_.active && b.r.contains(x, y)) return perform(b.action, now);
+        // Fingers don't draw, so a tap elsewhere puts the tools or the menu away.
+        closePanel();
+        closePaperMenu();
+    }
+    if (penNear_ || !pageArea_.contains(x, y)) return;  // a palm, most likely
+    fingers_.push_back({id, double(x), double(y)});
+    if (fingers_.size() == 2) {
+        // Pinch: the page point between the fingers stays between them.
+        if (viewGesture_ == ViewGesture::None) beginViewGesture();
+        viewGesture_ = ViewGesture::Pinch;
+        const Finger &a = fingers_[0], &b = fingers_[1];
+        pinchStartZoom_ = zoom_;
+        pinchStartDist_ = std::max(1.0, std::hypot(a.x - b.x, a.y - b.y));
+        viewAnchor_ = {xf_.toPageX((a.x + b.x) / 2), xf_.toPageY((a.y + b.y) / 2)};
+    } else if (fingers_.size() == 1 && tool_ == ToolKind::Pan) {
+        beginViewGesture();
+        viewGesture_ = ViewGesture::Pan;
+        viewAnchor_ = {xf_.toPageX(x), xf_.toPageY(y)};
+    }
+}
+
+void Editor::touchMove(int id, int x, int y, uint64_t now) {
+    auto f = std::find_if(fingers_.begin(), fingers_.end(), [&](const Finger& g) { return g.id == id; });
+    if (f == fingers_.end()) return;
+    f->x = x;
+    f->y = y;
+    if (viewGesture_ == ViewGesture::Pinch && fingers_.size() >= 2) {
+        const Finger &a = fingers_[0], &b = fingers_[1];
+        const double factor = std::hypot(a.x - b.x, a.y - b.y) / pinchStartDist_;
+        moveViewTo(pinchStartZoom_ * factor, viewAnchor_, (a.x + b.x) / 2, (a.y + b.y) / 2);
+    } else if (viewGesture_ == ViewGesture::Pan) {
+        moveViewTo(zoom_, viewAnchor_, x, y);
+    } else {
+        return;
+    }
+    if (now >= lastViewFrame_ + kViewFrameMs) viewFrame(now);
+}
+
+void Editor::touchUp(int id, uint64_t now) {
+    fingers_.erase(std::remove_if(fingers_.begin(), fingers_.end(), [&](const Finger& g) { return g.id == id; }),
+                   fingers_.end());
+    const bool over = (viewGesture_ == ViewGesture::Pinch && fingers_.size() < 2) ||
+                      (viewGesture_ == ViewGesture::Pan && fingers_.empty());
+    if (!over) return;
+    viewGesture_ = ViewGesture::None;
+    endViewGesture(now);
+}
+
+// ---- zoom and pan ----
+
+// Scaled `zoom` times from fitting the page in the drawing area, and moved no
+// further than the page's edges (centered where the page is smaller than the area).
+PageTransform Editor::clampedView(double zoom, double offsetX, double offsetY) const {
+    const Page& p = doc_.pages[page_];
+    PageTransform t;
+    t.scale = fitPage(p, pageArea_).scale * zoom;
+    auto axis = [](double offset, double length, int a0, int a1) {
+        if (length <= a1 - a0) return a0 + (a1 - a0 - length) / 2;
+        return std::clamp(offset, a1 - length, double(a0));
+    };
+    t.offsetX = axis(offsetX, p.width * t.scale, pageArea_.x0, pageArea_.x1);
+    t.offsetY = axis(offsetY, p.height * t.scale, pageArea_.y0, pageArea_.y1);
+    return t;
+}
+
+void Editor::setView(const PageTransform& t, double zoom) {
+    xf_ = t;
+    zoom_ = zoom;
+    if (sel_.active) layoutOverlay();
+}
+
+void Editor::moveViewTo(double zoom, const StrokePoint& anchor, double x, double y) {
+    const double z = std::clamp(zoom, 1.0, kMaxZoom);
+    const double scale = fitPage(currentPage(), pageArea_).scale * z;
+    const PageTransform t = clampedView(z, x - anchor.x * scale, y - anchor.y * scale);
+    if (sameView(t, xf_)) return;
+    setView(t, z);
+    viewDirty_ = true;
+}
+
+// The zoom buttons and the mouse wheel: straight to a proper redraw.
+void Editor::zoomTo(double zoom, double x, double y, uint64_t now) {
+    const PageTransform before = xf_;
+    moveViewTo(zoom, {xf_.toPageX(x), xf_.toPageY(y)}, x, y);
+    viewDirty_ = false;
+    if (sameView(before, xf_)) return;
+    repaint(pageArea_, Refresh::Content);
+    setStatus(std::to_string(std::lround(zoom_ * 100)) + "%", now);
+}
+
+void Editor::zoomBy(double factor, double x, double y, uint64_t now) { zoomTo(zoom_ * factor, x, y, now); }
+
+void Editor::panBy(double dx, double dy, uint64_t now) {
+    (void)now;
+    const PageTransform t = clampedView(zoom_, xf_.offsetX + dx, xf_.offsetY + dy);
+    if (sameView(t, xf_)) return;
+    setView(t, zoom_);
+    repaint(pageArea_, Refresh::Content);
+}
+
+void Editor::beginViewGesture() {
     closePanel();
     closePaperMenu();
+    // Previews scale the page as it is on screen now, without what's drawn over it.
+    snapshot_ = canvas_;
+    for (IRect r : {panel_.tabRect(), overlayArea()}) {
+        r = r.intersected(pageArea_);
+        if (r.empty()) continue;
+        snapshot_.fill(r, kOffPageGray);
+        drawPage(snapshot_, currentPage(), xf_, r, opts_.render);
+    }
+    snapshotXf_ = xf_;
+    viewDirty_ = false;
+    viewFrames_ = 0;
+    slowestViewFrameMs_ = 0;
+    lastViewFrame_ = 0;
+}
+
+// A preview: each pixel taken from where it was when the gesture began, in black
+// and white for DU. Whatever wasn't on screen then shows as blank page.
+void Editor::viewFrame(uint64_t now) {
+    if (!viewDirty_) return;
+    const auto start = std::chrono::steady_clock::now();
+    const IRect a = pageArea_;
+    const IRect page = xf_.pageRect(currentPage()).intersected(a);
+    const double k = snapshotXf_.scale / xf_.scale;
+    std::vector<int> srcX(static_cast<size_t>(a.width()));
+    for (int x = a.x0; x < a.x1; ++x)
+        srcX[static_cast<size_t>(x - a.x0)] = static_cast<int>(std::floor((x + 0.5 - xf_.offsetX) * k + snapshotXf_.offsetX));
+    for (int y = a.y0; y < a.y1; ++y) {
+        const int sy = static_cast<int>(std::floor((y + 0.5 - xf_.offsetY) * k + snapshotXf_.offsetY));
+        const uint8_t* src = sy >= a.y0 && sy < a.y1 ? snapshot_.row(sy) : nullptr;
+        const bool pageRow = y >= page.y0 && y < page.y1;
+        uint8_t* row = canvas_.row(y);
+        for (int x = a.x0; x < a.x1; ++x) {
+            const int sx = srcX[static_cast<size_t>(x - a.x0)];
+            uint8_t v = pageRow && x >= page.x0 && x < page.x1 ? 255 : kOffPageGray;
+            if (src && sx >= a.x0 && sx < a.x1) v = src[sx];
+            row[x] = v < 128 ? 0 : 255;
+        }
+    }
+    drawChrome(a);
+    damage_.push_back({a, Refresh::Ink});
+    viewDirty_ = false;
+    lastViewFrame_ = now;
+    ++viewFrames_;
+    slowestViewFrameMs_ = std::max(slowestViewFrameMs_, msSince(start));
+}
+
+void Editor::endViewGesture(uint64_t now) {
+    const bool changed = viewFrames_ > 0 || viewDirty_;
+    viewDirty_ = false;
+    snapshot_ = Canvas(0, 0);
+    if (!changed) return;
+    status_ = std::to_string(std::lround(zoom_ * 100)) + "%";
+    statusUntil_ = now + 1500;
+    const auto start = std::chrono::steady_clock::now();
+    redrawAll(Refresh::Full);  // with a flash, which clears what the quick previews leave behind
+    std::fprintf(stderr, "scrible: zoom %ld%%: %d preview frames (slowest %.0f ms), page redrawn in %.0f ms\n",
+                 std::lround(zoom_ * 100), viewFrames_, slowestViewFrameMs_, msSince(start));
 }
 
 void Editor::commitStroke(uint64_t now) {
@@ -847,9 +1042,26 @@ void Editor::perform(Action a, uint64_t now) {
             else panel_.setOpen(false);
             return refreshPanel(panelBefore);
         case Action::Lasso:
-            tool_ = ToolKind::Lasso;
+        case Action::Pan:
+            tool_ = a == Action::Lasso ? ToolKind::Lasso : ToolKind::Pan;
             panel_.setOpen(false);
             return refreshPanel(panelBefore);
+        case Action::ZoomIn:
+        case Action::ZoomOut:
+        case Action::ZoomFit: {
+            // In steps, about the middle of the screen; the panel stays open for more.
+            double z = 1;
+            if (a == Action::ZoomIn) {
+                z = kMaxZoom;
+                for (double step : kZoomSteps)
+                    if (step > zoom_ + 0.01) { z = step; break; }
+            } else if (a == Action::ZoomOut) {
+                for (double step : kZoomSteps)
+                    if (step < zoom_ - 0.01) z = step;
+            }
+            zoomTo(z, (pageArea_.x0 + pageArea_.x1) / 2.0, (pageArea_.y0 + pageArea_.y1) / 2.0, now);
+            return;
+        }
         case Action::Shapes:
             clearSelection();
             shapes_ = !shapes_;
@@ -860,7 +1072,7 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::SizeFine:
         case Action::SizeMedium:
         case Action::SizeThick:
-            if (tool_ != ToolKind::Lasso) {
+            if (tool_ != ToolKind::Lasso && tool_ != ToolKind::Pan) {
                 sizes_[static_cast<size_t>(tool_)] = a == Action::SizeFine     ? ToolSize::Fine
                                                      : a == Action::SizeMedium ? ToolSize::Medium
                                                                                : ToolSize::Thick;
@@ -924,6 +1136,10 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::Pen:
         case Action::Shapes:
         case Action::Lasso:
+        case Action::Pan:
+        case Action::ZoomOut:
+        case Action::ZoomIn:
+        case Action::ZoomFit:
         case Action::Highlighter:
         case Action::Eraser:
         case Action::SizeFine:
@@ -957,7 +1173,11 @@ void Editor::setPage(size_t index) {
     chain_.valid = false;
     sel_ = Selection{};
     overlayButtons_.clear();
-    xf_ = fitPage(currentPage(), pageArea_);
+    xf_ = fitPage(currentPage(), pageArea_);  // back to fitting the page
+    zoom_ = 1;
+    fingers_.clear();
+    viewGesture_ = ViewGesture::None;
+    viewDirty_ = false;
     settle_ = {};
     settleAt_ = 0;
     redrawAll(Refresh::Full);
@@ -1112,6 +1332,7 @@ void Editor::onIdle(uint64_t now) {
     }
     const bool busy = penBusy();
     if (gesture_ == Gesture::Drag && !dragDirty_.empty() && now >= lastDragFrame_ + kDragFrameMs) dragFrame(now);
+    if (viewDirty_ && now >= lastViewFrame_ + kViewFrameMs) viewFrame(now);
     if (settleAt_ && now >= settleAt_ && !busy) {
         // Repaint from the document (replacing the live-ink approximations) and refresh
         // with the grayscale waveform, so antialiasing and highlighters show properly.
@@ -1139,6 +1360,7 @@ int Editor::msUntilIdleWork(uint64_t now) const {
         if (t && (!next || t < next)) next = t;
     };
     if (gesture_ == Gesture::Drag && !dragDirty_.empty()) consider(lastDragFrame_ + kDragFrameMs);
+    if (viewDirty_) consider(std::max<uint64_t>(lastViewFrame_ + kViewFrameMs, 1));
     if (!busy) consider(settleAt_);
     consider(statusUntil_);
     if (modified_ && !busy && !settleAt_) consider(std::max<uint64_t>(modifiedSince_ + opts_.autosaveDelayMs, 1));

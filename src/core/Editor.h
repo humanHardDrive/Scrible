@@ -44,7 +44,7 @@ struct PenSample {
     bool button = false;    // side button held: highlights whatever the tool, like the native notebook
 };
 
-enum class ToolKind { Pen, Highlighter, Eraser, Lasso };
+enum class ToolKind { Pen, Highlighter, Eraser, Lasso, Pan };
 
 struct EditorOptions {
     RenderStyle render;  // the Kindle turns antialiasing off (see RenderStyle)
@@ -76,7 +76,12 @@ public:
     bool modified() const { return modified_; }
     bool eraseWholeStrokes() const { return eraseWhole_; }
     bool recognizeShapes() const { return shapes_; }
-    ToolSize toolSize(ToolKind t) const { return t == ToolKind::Lasso ? ToolSize::Medium : sizes_[static_cast<size_t>(t)]; }
+    ToolSize toolSize(ToolKind t) const {
+        return t == ToolKind::Lasso || t == ToolKind::Pan ? ToolSize::Medium : sizes_[static_cast<size_t>(t)];
+    }
+    // The view of the page: zoom() is relative to fitting it in the drawing area (1 to 4).
+    double zoom() const { return zoom_; }
+    const PageTransform& view() const { return xf_; }
 
     // Lasso selection (strokes of the top layer), and its on-screen frame, resize
     // handle and buttons; empty when nothing is selected.
@@ -96,7 +101,18 @@ public:
     void penDown(const PenSample& s, uint64_t now);
     void penMove(const PenSample& s, uint64_t now);
     void penUp(uint64_t now);
-    void touchDown(int x, int y, uint64_t now);  // fingers only operate the toolbar (palm rejection)
+    // Fingers operate the toolbar and menus. On the page, two fingers pinch to zoom
+    // and move the page, and with the PAN tool one finger moves it; that's ignored
+    // while the pen is near the screen, so a resting palm does nothing. `id` tells
+    // fingers apart; touchDown(x, y) is a tap.
+    void touchDown(int x, int y, uint64_t now);
+    void touchDown(int id, int x, int y, uint64_t now);
+    void touchMove(int id, int x, int y, uint64_t now);
+    void touchUp(int id, uint64_t now);
+    void setPenNear(bool near) { penNear_ = near; }  // hovering over the screen, or on it
+    // Mouse wheel and trackpad (desktop): zoom about a point, or move the page.
+    void zoomBy(double factor, double x, double y, uint64_t now);
+    void panBy(double dx, double dy, uint64_t now);
     void perform(Action a, uint64_t now);
 
     bool save(uint64_t now, bool quiet = false);
@@ -125,7 +141,7 @@ private:
         std::optional<Page> pageData;    // AddPage: filled while undone; DeletePage: while done
         Background background{};         // Background: the page's other one (swapped in and out)
     };
-    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag };
+    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag, Pan };
     enum class DragKind { Move, Resize };
     struct OverlayButton {
         Action action;
@@ -142,6 +158,13 @@ private:
     double pointWidth(const PenSample& s) const;
 
     void setPage(size_t index);
+    PageTransform clampedView(double zoom, double offsetX, double offsetY) const;
+    void setView(const PageTransform& t, double zoom);
+    void zoomTo(double zoom, double x, double y, uint64_t now);  // keeps the page point at (x, y) where it is
+    void beginViewGesture();
+    void moveViewTo(double zoom, const StrokePoint& anchor, double x, double y);  // `anchor` (page) to (x, y)
+    void viewFrame(uint64_t now);
+    void endViewGesture(uint64_t now);
     void addPage(uint64_t now);
     void eraseAt(const PenSample& s, uint64_t now);
     void previewArea(const IRect& r, uint64_t now);
@@ -200,6 +223,25 @@ private:
     std::string path_;
     size_t page_ = 0;
     PageTransform xf_;
+    double zoom_ = 1;
+
+    // Pinching and panning: quick black-and-white previews made by scaling what was
+    // on screen when the gesture began, then one proper redraw at the end.
+    struct Finger {
+        int id;
+        double x, y;
+    };
+    std::vector<Finger> fingers_;  // on the page
+    enum class ViewGesture { None, Pinch, Pan } viewGesture_ = ViewGesture::None;
+    bool penNear_ = false;
+    double pinchStartZoom_ = 1, pinchStartDist_ = 1;
+    StrokePoint viewAnchor_{0, 0};  // the page point held under the fingers or pen
+    Canvas snapshot_{0, 0};
+    PageTransform snapshotXf_;
+    bool viewDirty_ = false;
+    uint64_t lastViewFrame_ = 0;
+    int viewFrames_ = 0;
+    double slowestViewFrameMs_ = 0;
 
     ToolKind tool_ = ToolKind::Pen;
     ToolKind inkTool_ = ToolKind::Pen;  // what the stroke being written is drawn with

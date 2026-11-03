@@ -87,6 +87,10 @@ const Stroke& strokeAt(const Document& d, size_t page, size_t layer, size_t i) {
     return std::get<Stroke>(d.pages[page].layers[layer].elements[i]);
 }
 
+bool sameTransform(const PageTransform& a, const PageTransform& b) {
+    return a.scale == b.scale && a.offsetX == b.offsetX && a.offsetY == b.offsetY;
+}
+
 bool hasMode(const std::vector<Damage>& ds, Refresh m) {
     for (const auto& d : ds)
         if (d.mode == m) return true;
@@ -2065,6 +2069,154 @@ TEST(exit_buttons_show_they_were_pressed) {
     const IRect r = again.library()->toolbar().buttonRect(Action::Exit);
     CHECK(again.canvas().at(r.x0 + 6, r.y0 + 6) == 0 && hasMode(again.takeDamage(), Refresh::UI));
     removeDir(dir);
+}
+
+// ---- zoom and pan ----
+
+TEST(zoom_buttons_step_and_page_changes_reset) {
+    Editor e(1860, 2480, Document{}, tempPath("zoom-steps.xopp"));
+    uint64_t t = 0;
+    CHECK(e.zoom() == 1);
+    for (double expected : {1.5, 2.0, 3.0, 4.0, 4.0}) {
+        e.perform(Action::ZoomIn, t += 10);
+        CHECK_NEAR(e.zoom(), expected, 1e-9);
+    }
+    e.perform(Action::ZoomOut, t += 10);
+    CHECK_NEAR(e.zoom(), 3, 1e-9);
+    e.perform(Action::ZoomFit, t += 10);
+    CHECK(e.zoom() == 1);
+    e.perform(Action::ZoomOut, t += 10);  // never smaller than fitting the page
+    CHECK(e.zoom() == 1);
+    // Zoomed in, the page fills the drawing area and goes no further than its edges.
+    e.perform(Action::ZoomIn, t += 10);
+    const Page& p = e.document().pages[0];
+    const IRect r = e.view().pageRect(p);
+    CHECK(r.x0 <= 0 && r.x1 >= 1860 && r.y0 <= e.toolbar().rect().y1 && r.y1 >= 2480);
+    e.panBy(-100000, -100000, t += 10);
+    CHECK_NEAR(e.view().toScreenX(p.width), 1860, 1);
+    CHECK_NEAR(e.view().toScreenY(p.height), 2480, 1);
+    // A new page starts fitted.
+    e.perform(Action::NextPage, t += 10);
+    CHECK(e.zoom() == 1);
+}
+
+TEST(writing_while_zoomed_lands_on_the_page) {
+    Editor e(900, 1200, Document{}, tempPath("zoom-write.xopp"));
+    uint64_t t = 0;
+    e.perform(Action::ZoomIn, t += 10);
+    e.perform(Action::ZoomIn, t += 10);  // 200%
+    const PageTransform v = e.view();
+    drawLine(e, 300, 500, 600, t);
+    const auto& els = e.document().pages[0].layers.back().elements;
+    CHECK(els.size() == 1);
+    if (els.size() != 1) return;
+    const Stroke& s = std::get<Stroke>(els[0]);
+    CHECK_NEAR(s.points.front().x, v.toPageX(300), 0.5);
+    CHECK_NEAR(s.points.front().y, v.toPageY(600), 0.5);
+    // Twice the screen size of the same stroke at 100%.
+    CHECK_NEAR(v.scale, 2 * fitPage(e.document().pages[0], {0, 120, 900, 1200}).scale, 1e-9);
+}
+
+TEST(pinch_zooms_about_the_fingers) {
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, Document{}, tempPath("pinch.xopp"), o);
+    EinkPanel panel(1860, 2480);
+    std::vector<Damage> last;
+    auto flush = [&] {
+        last = e.takeDamage();
+        for (const Damage& d : last) panel.refresh(e.canvas(), d);
+    };
+    uint64_t t = 1000;
+    drawLine(e, 400, 1000, 1400, t);
+    e.onIdle(t += 1000);
+    flush();
+
+    // Two fingers 400 px apart around (900, 1300), spreading to 800 px: 200%.
+    const StrokePoint under{e.view().toPageX(900), e.view().toPageY(1300)};
+    e.touchDown(0, 700, 1300, t += 10);
+    e.touchDown(1, 1100, 1300, t += 10);
+    flush();
+    for (int step = 1; step <= 10; ++step) {
+        e.touchMove(0, 700 - 20 * step, 1300, t += 50);
+        e.touchMove(1, 1100 + 20 * step, 1300, t += 50);
+        e.onIdle(t);
+        flush();
+        for (const Damage& d : last) CHECK(d.mode == Refresh::Ink);  // quick black-and-white previews
+    }
+    CHECK_NEAR(e.zoom(), 2, 1e-6);
+    CHECK_NEAR(e.view().toScreenX(under.x), 900, 1);  // what was between the fingers still is
+    CHECK_NEAR(e.view().toScreenY(under.y), 1300, 1);
+    e.touchUp(1, t += 10);
+    flush();
+    CHECK(hasMode(last, Refresh::Full));  // one proper redraw, with a flash
+    e.touchUp(0, t += 10);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+
+    // No further than 400%.
+    e.touchDown(0, 800, 1300, t += 10);
+    e.touchDown(1, 1000, 1300, t += 10);
+    e.touchMove(1, 1800, 1300, t += 200);
+    e.touchUp(0, t += 10);
+    e.touchUp(1, t += 10);
+    CHECK_NEAR(e.zoom(), 4, 1e-9);
+
+    // With the pen near the screen, two fingers are a palm: nothing happens.
+    e.perform(Action::ZoomFit, t += 10);
+    e.setPenNear(true);
+    e.touchDown(0, 700, 1300, t += 10);
+    e.touchDown(1, 1100, 1300, t += 10);
+    e.touchMove(1, 1500, 1300, t += 200);
+    e.touchUp(0, t += 10);
+    e.touchUp(1, t += 10);
+    CHECK(e.zoom() == 1);
+    e.setPenNear(false);
+    CHECK(e.document().pages[0].layers.back().elements.size() == 1);  // fingers never draw
+}
+
+TEST(pan_tool_moves_the_page_with_pen_or_finger) {
+    Editor e(900, 1200, Document{}, tempPath("pan.xopp"));
+    uint64_t t = 0;
+    e.perform(Action::ZoomIn, t += 10);
+    e.perform(Action::ZoomIn, t += 10);  // 200%
+    // Without the PAN tool, one finger doesn't move the page.
+    const PageTransform before = e.view();
+    e.touchDown(0, 400, 600, t += 10);
+    e.touchMove(0, 500, 700, t += 200);
+    e.touchUp(0, t += 10);
+    CHECK(sameTransform(e.view(), before));
+    // With it, the pen drags the page along...
+    e.perform(Action::Pan, t += 10);
+    CHECK(e.tool() == ToolKind::Pan);
+    e.penDown({400, 600, 0.5, false}, t += 10);
+    e.penMove({450, 650, 0.5, false}, t += 200);
+    e.penUp(t += 10);
+    CHECK_NEAR(e.view().offsetX, before.offsetX + 50, 1e-6);
+    CHECK_NEAR(e.view().offsetY, before.offsetY + 50, 1e-6);
+    CHECK(e.document().pages[0].layers.back().elements.empty());  // and draws nothing
+    // ...and so does a finger.
+    e.touchDown(0, 400, 600, t += 10);
+    e.touchMove(0, 370, 560, t += 200);
+    e.touchUp(0, t += 10);
+    CHECK_NEAR(e.view().offsetX, before.offsetX + 20, 1e-6);
+    CHECK_NEAR(e.view().offsetY, before.offsetY + 10, 1e-6);
+}
+
+TEST(tool_panel_has_pan_and_zoom_and_fits) {
+    for (auto [w, h] : {std::pair{1860, 2480}, std::pair{1072, 1448}}) {
+        Editor e(w, h, Document{}, tempPath("panel-zoom.xopp"));
+        const IRect tab = center(e.toolPanel().buttonRect(Action::Tools));
+        e.touchDown(tab.x0, tab.y0, 10);
+        for (Action a : {Action::Pan, Action::ZoomOut, Action::ZoomIn, Action::ZoomFit}) {
+            const IRect r = e.toolPanel().buttonRect(a);
+            CHECK(!r.empty() && r.y1 <= h);
+        }
+        // The zoom buttons leave the panel open, for another tap.
+        const IRect in = center(e.toolPanel().buttonRect(Action::ZoomIn));
+        e.touchDown(in.x0, in.y0, 20);
+        CHECK(e.zoom() > 1 && e.toolPanel().open());
+    }
 }
 
 // ---- about ----

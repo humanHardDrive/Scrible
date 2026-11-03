@@ -17,7 +17,7 @@ constexpr int kAside = 12;  // between the column and the options
 constexpr int kArrow = 16;        // the tab's arrow (twice as tall), and the space either side of it
 constexpr int kArrowPad = 28;
 
-constexpr Action kColumn[] = {Action::Pen, Action::Shapes, Action::Lasso, Action::Highlighter, Action::Eraser};
+constexpr Action kColumn[] = {Action::Pen, Action::Shapes, Action::Lasso, Action::Highlighter, Action::Eraser, Action::Pan};
 constexpr Action kSizes[] = {Action::SizeFine, Action::SizeMedium, Action::SizeThick};
 
 const char* label(Action a) {
@@ -27,6 +27,8 @@ const char* label(Action a) {
         case Action::Lasso: return "LASSO";
         case Action::Highlighter: return "MARK";
         case Action::Eraser: return "ERASE";
+        case Action::Pan: return "PAN";
+        case Action::ZoomFit: return "FIT";
         case Action::ErasePartial: return "PARTIAL";
         case Action::EraseWhole: return "WHOLE";
         default: return "";
@@ -58,13 +60,20 @@ void ToolPanel::layout() {
 
     // The column grows out of the tab, down from the same corner.
     const int columnW = textWidth("SHAPE") + 2 * kGap + kBox + 2 * kTextPad + 2 * kPad;
-    const int n = static_cast<int>(std::size(kColumn));
-    column_ = {tab_.x0, tab_.y0, tab_.x0 + columnW, tab_.y0 + 2 * kPad + n * kButtonH + (n - 1) * kGap};
+    // The tools, then (set apart) zoom out / in side by side, and FIT.
+    const int n = static_cast<int>(std::size(kColumn)) + 2;
+    column_ = {tab_.x0, tab_.y0, tab_.x0 + columnW, tab_.y0 + 2 * kPad + n * kButtonH + (n - 1) * kGap + 2 * kGap};
+    const int x0 = column_.x0 + kPad, x1 = column_.x1 - kPad, xm = (x0 + x1) / 2;
     int y = column_.y0 + kPad;
     for (Action a : kColumn) {
-        buttons_.push_back({a, {column_.x0 + kPad, y, column_.x1 - kPad, y + kButtonH}});
+        buttons_.push_back({a, {x0, y, x1, y + kButtonH}});
         y += kButtonH + kGap;
     }
+    y += 2 * kGap;
+    buttons_.push_back({Action::ZoomOut, {x0, y, xm - kGap / 2, y + kButtonH}});
+    buttons_.push_back({Action::ZoomIn, {xm + kGap / 2, y, x1, y + kButtonH}});
+    y += kButtonH + kGap;
+    buttons_.push_back({Action::ZoomFit, {x0, y, x1, y + kButtonH}});
     if (options_ == Action::None) return;
 
     std::vector<Action> opts(std::begin(kSizes), std::end(kSizes));
@@ -140,7 +149,12 @@ void ToolPanel::draw(Canvas& c, const ToolPanelState& s, const IRect& clip) cons
             const int t = std::clamp(static_cast<int>(std::lround(px)), 2, b.r.height() - 2 * kTextPad);
             const int y = b.r.y0 + (b.r.height() - t) / 2;
             fill({b.r.x0 + kTextPad, y, b.r.x1 - kTextPad, y + t}, ink);
-        } else if (b.action == Action::ErasePartial || b.action == Action::EraseWhole) {
+        } else if (b.action == Action::ZoomOut || b.action == Action::ZoomIn) {
+            // Drawn rather than lettered: the font's "-" is a hairline.
+            const int cx = (b.r.x0 + b.r.x1) / 2, cy = (b.r.y0 + b.r.y1) / 2, arm = 16, half = 3;
+            fill({cx - arm, cy - half, cx + arm, cy + half}, ink);
+            if (b.action == Action::ZoomIn) fill({cx - half, cy - arm, cx + half, cy + arm}, ink);
+        } else if (b.action == Action::ErasePartial || b.action == Action::EraseWhole || b.action == Action::ZoomFit) {
             drawLabel(c, b.r, -1, label(b.action), ink, clip);
         } else {
             drawLabel(c, b.r, b.r.x0 + kTextPad, label(b.action), ink, clip);

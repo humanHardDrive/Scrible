@@ -43,7 +43,15 @@ public:
     void penDown(const PenSample& s, uint64_t now);
     void penMove(const PenSample& s, uint64_t now);
     void penUp(uint64_t now);
-    void touchDown(int x, int y, uint64_t now);
+    void touchDown(int x, int y, uint64_t now);  // a tap
+    // Fingers, told apart by `id`: on a notebook's page, two pinch to zoom (see Editor).
+    void touchDown(int id, int x, int y, uint64_t now);
+    void touchMove(int id, int x, int y, uint64_t now);
+    void touchUp(int id, uint64_t now);
+    void setPenNear(bool near);  // the pen hovers over the screen, or touches it
+    // Mouse wheel and trackpad.
+    void zoomBy(double factor, double x, double y, uint64_t now);
+    void panBy(double dx, double dy, uint64_t now);
     void perform(Action a, uint64_t now);  // keyboard shortcuts
 
     void onIdle(uint64_t now);
@@ -67,6 +75,8 @@ private:
     std::unique_ptr<Editor> editor_;
     std::string startupError_;
     bool quit_ = false;
+    int fingers_ = 0;  // down on the screen
+    bool penNear_ = false;
     // Opening a notebook is deferred until the tapped row's highlight is on screen:
     // loading a large notebook takes a moment.
     std::function<void()> deferred_;

@@ -8,7 +8,8 @@
 // A folder (default ~/Documents/Scrible) opens the notebook list; a
 // .xopp/.xoj file opens just that notebook.
 // Mouse: left = pen, right = eraser, middle = highlighter (like a pen's side
-// button). A drawing tablet gets real pressure.
+// button); the wheel moves the page, and zooms with Cmd/Ctrl. A drawing tablet
+// gets real pressure.
 // Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, Cmd/Ctrl+S save,
 //       P/H/E/L pen/highlighter/eraser/lasso, 1/2/3 sizes, Delete removes the selection,
 //       Left/Right pages,
@@ -20,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -188,6 +190,12 @@ int main(int argc, char** argv) {
                     if (!mouseDrawing) break;
                     app.penUp(now);
                     mouseDrawing = false;
+                    break;
+                case SDL_EVENT_MOUSE_WHEEL:
+                    // Scrolling moves the page; with Cmd/Ctrl it zooms about the pointer.
+                    win.toCanvas(ev.wheel.mouse_x, ev.wheel.mouse_y, x, y);
+                    if (SDL_GetModState() & (SDL_KMOD_GUI | SDL_KMOD_CTRL)) app.zoomBy(std::pow(1.1, ev.wheel.y), x, y, now);
+                    else app.panBy(-ev.wheel.x * 40, ev.wheel.y * 40, now);
                     break;
 
                 case SDL_EVENT_PEN_AXIS:

@@ -38,6 +38,10 @@ The numbering differs from [koreader#11156](https://github.com/koreader/koreader
 - Pen protocol is Wacom-style: BTN_TOOL_PEN (hover), BTN_TOOL_RUBBER (eraser end),
   BTN_TOUCH (contact), BTN_STYLUS/BTN_STYLUS2 (side buttons). The side button
   highlights, as the native notebook's default does; the eraser end erases.
+- Pinch zoom relies on hover (BTN_TOOL_PEN) for palm rejection: touches on the page are
+  ignored while the pen is in range. **Unverified:** that `stylus-custom` reports hover;
+  the log's `pen hover …` line at exit says. Each zoom or pan logs its preview frame
+  count, the slowest preview and the final redraw time (`scrible: zoom …`).
 
 Re-check orientation over SSH with `sh /mnt/us/scrible/run.sh --probe 30`, which marks
 where the app sees the pen and fingers; fix it with `--pen-transform` /

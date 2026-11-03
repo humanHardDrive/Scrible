@@ -294,8 +294,16 @@ int main(int argc, char** argv) {
 
         touchEvents.clear();
         if (fds[1].revents & POLLIN) touch.read(touchEvents);
-        for (const auto& e : touchEvents)
-            if (e.type == scrible::TouchEvent::Type::Down) app.touchDown(static_cast<int>(e.x), static_cast<int>(e.y), now);
+        // Pinching only works with the pen away from the screen (palm rejection).
+        app.setPenNear(pen.near());
+        for (const auto& e : touchEvents) {
+            const int x = static_cast<int>(e.x), y = static_cast<int>(e.y);
+            switch (e.type) {
+                case scrible::TouchEvent::Type::Down: app.touchDown(e.id, x, y, now); break;
+                case scrible::TouchEvent::Type::Move: app.touchMove(e.id, x, y, now); break;
+                case scrible::TouchEvent::Type::Up: app.touchUp(e.id, now); break;
+            }
+        }
 
         if (fds[2].revents & (POLLIN | POLLHUP)) {
             for (const auto ev : power.read()) {
@@ -309,5 +317,6 @@ int main(int argc, char** argv) {
     }
 
     stats.log(pen);
+    std::fprintf(stderr, "scrible: pen hover %s\n", pen.hoverSeen() ? "reported" : "never reported (palm rejection only while writing)");
     return app.saveNow(nowMs()) ? 0 : 1;
 }
