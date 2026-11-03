@@ -42,12 +42,14 @@ add_library(scrible_core STATIC
   src/core/About.cpp
   src/core/App.cpp
   src/core/Canvas.cpp
+  src/core/DigitReader.cpp
   src/core/Document.cpp
   src/core/Editor.cpp
   src/core/EinkPanel.cpp
   src/core/Eraser.cpp
   src/core/Lasso.cpp
   src/core/Library.cpp
+  src/core/MathPopup.cpp
   src/core/Paper.cpp
   src/core/PaperMenu.cpp
   src/core/Png.cpp

@@ -100,6 +100,8 @@ REPO_URL="${SCRIBLE_SOURCE_URL:-$(git -C "$ROOT" config --get remote.origin.url 
     echo "  FBInk    https://github.com/NiLuJe/FBInk at commit $FBINK_REV"
     echo "  zlib     https://github.com/madler/zlib/releases/tag/v$ZLIB_VER"
     echo "  pugixml  $(sed -n 's/.*\(https:[^ ]*pugixml[^ ]*\.tar\.gz\).*/\1/p' "$ROOT/CMakeLists.txt")"
+    echo "and digit samples from \"Pen-Based Recognition of Handwritten Digits\" by"
+    echo "E. Alpaydin & F. Alimoglu (UCI, https://doi.org/10.24432/C5MG6K), CC BY 4.0."
 } >"$APP/NOTICE"
 # Library entries; sh_integration reads headers from the first 6 lines only.
 for s in "$ROOT"/kindle/scriptlets/*.sh; do

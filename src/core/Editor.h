@@ -7,12 +7,15 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "Canvas.h"
+#include "DigitReader.h"
 #include "Document.h"
+#include "MathPopup.h"
 #include "PaperMenu.h"
 #include "Renderer.h"
 #include "ToolPanel.h"
@@ -57,6 +60,7 @@ struct EditorOptions {
     int toolbarHeight = 120;
     double dpi = 300;  // sizes new notebooks so a page fills the screen
     std::string pageStyle = "lined";
+    std::string digitExamplesPath;  // where corrections to read digits are kept (none: not kept)
     uint64_t settleDelayMs = 600;  // pen rest time before the grayscale cleanup refresh
     uint64_t autosaveDelayMs = 30000;
 };
@@ -70,6 +74,7 @@ public:
     const Toolbar& toolbar() const { return toolbar_; }
     const ToolPanel& toolPanel() const { return panel_; }
     const PaperMenu& paperMenu() const { return paperMenu_; }
+    const MathPopup& mathPopup() const { return math_; }
     const std::string& path() const { return path_; }
     size_t pageIndex() const { return page_; }
     ToolKind tool() const { return tool_; }
@@ -180,6 +185,9 @@ private:
     void changePaper(Action a, uint64_t now);
     void closePaperMenu();
     void deletePage(uint64_t now);
+    void openMath(Action op);
+    void mathTap(int x, int y);
+    void closeMath();
     void finishExit(uint64_t now);
     void updateToolbar();
     void markModified(uint64_t now);
@@ -193,6 +201,8 @@ private:
     IRect pageArea_;
     ToolPanel panel_;
     PaperMenu paperMenu_;
+    MathPopup math_;
+    std::unique_ptr<DigitReader> digits_;  // loaded the first time it's needed
     Background paperBefore_;       // the page's paper when the menu opened
     bool deleteArmed_ = false;     // DELETE PAGE tapped once
     bool closePanelOnUp_ = false;  // the pen came down beside the open panel or paper menu

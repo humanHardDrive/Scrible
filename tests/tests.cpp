@@ -8,11 +8,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
 #include "About.h"
 #include "App.h"
+#include "DigitReader.h"
 #include "Editor.h"
 #include "EinkPanel.h"
 #include "Eraser.h"
@@ -2106,6 +2108,257 @@ TEST(library_about_dialog_opens_and_closes) {
         CHECK(lib.dialogRect().empty() && !app.quitRequested());
         removeDir(dir);
     }
+}
+
+// ---- reading handwritten numbers ----
+
+namespace {
+
+using Path = std::vector<StrokePoint>;
+
+// Digits drawn the way people often write them, in a unit box (y down).
+const std::vector<std::vector<Path>>& digitShapes() {
+    static const std::vector<std::vector<Path>> shapes = {
+        {{{0.5, 0}, {0.15, 0.2}, {0.1, 0.5}, {0.2, 0.85}, {0.5, 1}, {0.8, 0.85}, {0.9, 0.5}, {0.8, 0.15}, {0.5, 0}}},
+        {{{0.5, 0}, {0.5, 1}}},
+        {{{0.15, 0.25}, {0.35, 0.02}, {0.7, 0.02}, {0.85, 0.25}, {0.6, 0.55}, {0.1, 1}, {0.9, 1}}},
+        {{{0.15, 0.1}, {0.5, 0}, {0.85, 0.15}, {0.75, 0.4}, {0.4, 0.5}, {0.8, 0.6}, {0.85, 0.85}, {0.5, 1}, {0.15, 0.9}}},
+        {{{0.6, 0}, {0.05, 0.65}, {0.95, 0.65}}, {{0.7, 0.3}, {0.7, 1}}},
+        {{{0.25, 0}, {0.2, 0.45}, {0.6, 0.4}, {0.85, 0.6}, {0.8, 0.9}, {0.5, 1}, {0.15, 0.9}}, {{0.25, 0}, {0.85, 0}}},
+        {{{0.8, 0}, {0.4, 0.2}, {0.15, 0.6}, {0.25, 0.95}, {0.55, 1}, {0.8, 0.8}, {0.65, 0.55}, {0.3, 0.6}, {0.18, 0.7}}},
+        {{{0.1, 0}, {0.9, 0}, {0.4, 1}}},
+        {{{0.8, 0.12}, {0.5, 0}, {0.2, 0.15}, {0.3, 0.4}, {0.75, 0.6}, {0.8, 0.88}, {0.5, 1}, {0.2, 0.88}, {0.25, 0.6},
+          {0.7, 0.4}, {0.8, 0.15}}},
+        {{{0.8, 0.2}, {0.5, 0}, {0.2, 0.15}, {0.25, 0.4}, {0.55, 0.45}, {0.8, 0.25}, {0.8, 1}}},
+    };
+    return shapes;
+}
+
+// The paths of `text` ("0".."9", ".", ",", "-", " ") written from (x, y), each
+// character w by h: as many points as a pen would give.
+std::vector<Path> writePaths(const std::string& text, double x, double y, double w, double h) {
+    std::vector<Path> out;
+    auto add = [&](const Path& unit, double cx) {
+        Path p;
+        for (size_t i = 0; i + 1 < unit.size(); ++i)
+            for (int k = 0; k < 10; ++k) {
+                const double t = k / 10.0;
+                p.push_back({cx + w * (unit[i].x + (unit[i + 1].x - unit[i].x) * t),
+                             y + h * (unit[i].y + (unit[i + 1].y - unit[i].y) * t)});
+            }
+        p.push_back({cx + w * unit.back().x, y + h * unit.back().y});
+        out.push_back(p);
+    };
+    for (char c : text) {
+        if (c >= '0' && c <= '9') {
+            for (const Path& unit : digitShapes()[static_cast<size_t>(c - '0')]) add(unit, x);
+            x += w * 1.4;
+        } else if (c == '.') {
+            add({{0.1, 0.95}, {0.14, 0.98}}, x);
+            x += w * 0.5;
+        } else if (c == ',') {
+            add({{0.15, 0.92}, {0.05, 1.18}}, x);
+            x += w * 0.5;
+        } else if (c == '-') {
+            add({{0, 0.5}, {0.7, 0.5}}, x);
+            x += w * 1.1;
+        } else if (c == 'C') {  // a long comma, hanging below the line
+            add({{0.12, 0.6}, {0.02, 1.25}}, x);
+            x += w * 0.5;
+        } else if (c == 'N') {  // a 9 as a loop and then its tail
+            add({{0.8, 0.2}, {0.5, 0}, {0.2, 0.15}, {0.25, 0.4}, {0.55, 0.45}, {0.8, 0.25}}, x);
+            add({{0.8, 0.35}, {0.78, 1}}, x);
+            x += w * 1.4;
+        } else if (c == 'S') {  // a 7 with its bar drawn first
+            add({{0.05, 0}, {0.9, 0}}, x);
+            add({{0.9, 0.02}, {0.4, 1}}, x);
+            x += w * 1.4;
+        } else if (c == 'o') {  // a small 0, sitting low
+            Path zero;
+            for (const StrokePoint& p : digitShapes()[0][0]) zero.push_back({0.1 + 0.8 * p.x, 0.35 + 0.65 * p.y});
+            add(zero, x);
+            x += w * 1.2;
+        } else {
+            x += w * 2;
+        }
+    }
+    return out;
+}
+
+std::vector<Stroke> asStrokes(const std::vector<Path>& paths) {
+    std::vector<Stroke> out;
+    for (const Path& p : paths) {
+        Stroke s;
+        s.width = 1.41;
+        s.points = p;
+        out.push_back(s);
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST(digit_reader_reads_other_peoples_handwriting) {
+    // Samples of 30 writers, tested on the 14 others: the published figure is ~97-98%.
+    const DigitReader r(false);
+    size_t ok = 0;
+    for (size_t i = 0; i < DigitReader::testCount(); ++i) {
+        int d;
+        const DigitFeatures f = DigitReader::testSample(i, d);
+        ok += r.classify(f) == d;
+    }
+    CHECK(ok * 100 >= DigitReader::testCount() * 97);
+}
+
+TEST(digit_reader_reads_strokes_and_learns) {
+    const DigitReader shared;
+    for (int d = 0; d < 10; ++d) {
+        const std::vector<Stroke> ss = asStrokes(writePaths(std::string(1, char('0' + d)), 100, 100, 12, 20));
+        std::vector<const Stroke*> ptrs;
+        for (const Stroke& s : ss) ptrs.push_back(&s);
+        CHECK(shared.classify(digitFeatures(ptrs)) == d);
+    }
+    // A writer's own examples win over everyone else's: teach it that a 7 is a 1.
+    DigitReader r;
+    const std::vector<Stroke> seven = asStrokes(writePaths("7", 100, 100, 12, 20));
+    const DigitFeatures f = digitFeatures({&seven[0]});
+    CHECK(r.classify(f) == 7);
+    for (int i = 0; i < 3; ++i) r.addExample(f, 1);
+    CHECK(r.classify(f) == 1);
+    // Kept in a file, and read back.
+    const std::string path = tempPath("digits.txt");
+    std::remove(path.c_str());
+    CHECK(r.appendExample(path, f, 1) && r.appendExample(path, f, 1));
+    DigitReader again;
+    CHECK(again.loadExamples(path) && again.exampleCount() == 2);
+    std::remove(path.c_str());
+}
+
+TEST(reads_a_written_list_of_numbers) {
+    std::vector<Path> paths;
+    const char* lines[] = {"12", "7.5", "-30", "1,250", "4  96"};
+    for (int i = 0; i < 5; ++i)
+        for (const Path& p : writePaths(lines[i], 50, 50 + 40.0 * i, 12, 20)) paths.push_back(p);
+    const std::vector<ReadNumber> nums = readNumbers(asStrokes(paths), DigitReader());
+    std::vector<std::string> texts;
+    for (const ReadNumber& n : nums) texts.push_back(n.text());
+    CHECK(texts == (std::vector<std::string>{"12", "7.5", "-30", "1,250", "4", "96"}));
+    double v = 0;
+    const double expected[] = {12, 7.5, -30, 1250, 4, 96};
+    for (size_t i = 0; i < nums.size() && i < 6; ++i) CHECK(nums[i].parse(v) && v == expected[i]);
+}
+
+TEST(reads_commas_tails_and_bars_as_people_write_them) {
+    // Habits from a real handwriting test page: long commas that hang below the line,
+    // a 9 written as a loop and then a tail, a 7 with its bar drawn first, small 0s.
+    std::vector<Path> paths;
+    const char* lines[] = {"1C2N9", "S5", "1CoooCoo1", "NNNCNNNC999.9"};
+    for (int i = 0; i < 4; ++i)
+        for (const Path& p : writePaths(lines[i], 50, 50 + 40.0 * i, 12, 20)) paths.push_back(p);
+    std::vector<std::string> texts;
+    for (const ReadNumber& n : readNumbers(asStrokes(paths), DigitReader())) texts.push_back(n.text());
+    CHECK(texts == (std::vector<std::string>{"1,299", "75", "1,000,001", "999,999,999.9"}));
+}
+
+TEST(reads_lines_that_run_uphill_or_downhill) {
+    // On blank paper nothing keeps the writing level: tilt it both ways.
+    const char* lines[] = {"12", "7.5", "-30", "1C2N9", "1CoooCoo1", "4  96"};
+    const std::vector<std::string> expected = {"12", "7.5", "-30", "1,299", "1,000,001", "4", "96"};
+    for (double degrees : {-6.0, 6.0}) {
+        const double a = degrees * 3.14159265 / 180, c = std::cos(a), sn = std::sin(a);
+        std::vector<Path> paths;
+        for (int i = 0; i < 6; ++i)
+            for (Path p : writePaths(lines[i], 50, 50 + 40.0 * i, 12, 20)) {
+                for (StrokePoint& q : p) q = {100 + (q.x - 100) * c - (q.y - 150) * sn, 150 + (q.x - 100) * sn + (q.y - 150) * c};
+                paths.push_back(p);
+            }
+        std::vector<std::string> texts;
+        for (const ReadNumber& r : readNumbers(asStrokes(paths), DigitReader())) texts.push_back(r.text());
+        CHECK(texts == expected);
+    }
+}
+
+TEST(numbers_follow_the_writing_rules) {
+    auto parses = [](const std::string& t, double& v) {
+        ReadNumber n;
+        for (char c : t) n.chars.push_back({c, {}, {}, {}});
+        return n.parse(v);
+    };
+    double v = 0;
+    CHECK(parses("1,250,000.5", v) && v == 1250000.5);
+    CHECK(parses("-0.25", v) && v == -0.25);
+    CHECK(parses("42", v) && v == 42);
+    for (const char* bad : {"1,25", "1250,000", ",5", "1.", ".", "-", "1.2.3", "4?", "1,2345"}) CHECK(!parses(bad, v));
+}
+
+TEST(selection_math_reads_and_can_be_corrected) {
+    const std::string dir = tempDir("math");
+    EditorOptions o;
+    o.render.antialias = false;
+    o.digitExamplesPath = dir + "/.scrible-digits";
+    Editor e(1860, 2480, Document{}, dir + "/math.xopp", o);
+    EinkPanel panel(1860, 2480);
+    auto flush = [&] {
+        for (const Damage& d : e.takeDamage()) panel.refresh(e.canvas(), d);
+    };
+    uint64_t t = 1000;
+    auto pen = [&](const Path& p) {
+        e.penDown({p[0].x, p[0].y, 0.5, false}, t += 10);
+        for (size_t i = 1; i < p.size(); ++i) e.penMove({p[i].x, p[i].y, 0.5, false}, t += 5);
+        e.penUp(t += 5);
+        flush();
+    };
+    auto tap = [&](const IRect& r) {
+        CHECK(!r.empty());
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+    };
+    // A list, written at about the Scribe's handwriting size.
+    const char* lines[] = {"12", "7.5", "-30"};
+    for (int i = 0; i < 3; ++i)
+        for (const Path& p : writePaths(lines[i], 700, 900 + 160.0 * i, 60, 100)) pen(p);
+    e.onIdle(t += 1000);
+    flush();
+
+    // Lasso it; SUM is in the selection's menu, with the other math.
+    e.perform(Action::Lasso, t += 10);
+    pen({{600, 850}, {1200, 850}, {1200, 1360}, {600, 1360}, {600, 860}});
+    CHECK(e.selection().size() == 9);  // a 5 takes two strokes
+    for (Action a : {Action::MathSum, Action::MathAverage, Action::MathMin, Action::MathMax, Action::MathCount})
+        CHECK(!e.selectionButton(a).empty());
+    tap(e.selectionButton(Action::MathSum));
+    const MathPopup& m = e.mathPopup();
+    CHECK(m.open() && m.numbers().size() == 3);
+    CHECK(m.result() == "SUM OF 3 = -10.5");
+
+    // Tap the 2 of "12", make it a 7: the answer follows, and the reader learns.
+    tap(m.cellRect(0, 1));
+    tap(m.keyRect('7'));
+    CHECK(m.numbers()[0].text() == "17" && m.result() == "SUM OF 3 = -5.5");
+    std::ifstream kept(o.digitExamplesPath);
+    std::string line;
+    CHECK(std::getline(kept, line) && line[0] == '7');
+
+    // DONE closes it; the selection stays. Other math works the same way.
+    tap(m.doneRect());
+    CHECK(!m.open() && !e.selection().empty());
+    tap(e.selectionButton(Action::MathMax));
+    CHECK(m.result() == "MAX OF 3 = 17");  // read afresh: that 2 now reads as the 7 it was taught to be
+    e.touchDown(100, 2400, t += 10);  // a tap elsewhere closes it
+    flush();
+    CHECK(!m.open());
+
+    // A restarted editor reads with the example it was taught.
+    Editor again(1860, 2480, Document{}, dir + "/other.xopp", o);
+    (void)again;
+    DigitReader reader;
+    CHECK(reader.loadExamples(o.digitExamplesPath) && reader.exampleCount() == 1);
+
+    e.onIdle(t += 1000);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+    removeDir(dir);
 }
 
 int main() {

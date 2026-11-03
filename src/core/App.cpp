@@ -44,6 +44,7 @@ bool App::openNotebook(const std::string& path, std::string& error) {
     EditorOptions eo = opts_.editor;
     eo.fromList = library_ != nullptr;
     if (settings_) {
+        eo.digitExamplesPath = opts_.notebooksDir + "/.scrible-digits";
         eo.eraseWholeStrokes = settings_->get("eraser") == "stroke";
         eo.recognizeShapes = settings_->get("shapes") == "on";
         for (size_t k = 0; k < eo.sizes.size(); ++k)

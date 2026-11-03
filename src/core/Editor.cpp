@@ -1,5 +1,6 @@
 #include "Editor.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 
@@ -46,6 +47,7 @@ Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path
       pageArea_{0, opts_.toolbarHeight, screenWidth, screenHeight},
       panel_(pageArea_),
       paperMenu_(toolbar_.buttonRect(Action::PageStyle), pageArea_),
+      math_(pageArea_),
       doc_(std::move(doc)),
       path_(std::move(path)),
       sizes_(opts_.sizes),
@@ -137,6 +139,7 @@ void Editor::drawChrome(const IRect& clip) {
     if (sel_.active) drawOverlay(clip);
     panel_.draw(canvas_, panelState(), clip);
     paperMenu_.draw(canvas_, clip);
+    math_.draw(canvas_, clip);
 }
 
 // Shows the panel's new state. Covering more of the page (or changing in place)
@@ -319,6 +322,12 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         perform(panel_.covers(x, y) ? panel_.hit(x, y) : paperMenu_.hit(x, y), now);
         return;
     }
+    if (math_.open()) {  // its buttons, or a tap elsewhere closes it (and draws nothing)
+        gesture_ = Gesture::Toolbar;
+        if (math_.covers(x, y)) mathTap(x, y);
+        else closeMath();
+        return;
+    }
     // Writing beside the open panel or menu puts it away, once the pen lifts:
     // repainting what it covers needs the slow waveform, which mustn't delay the ink.
     closePanelOnUp_ = panel_.open() || paperMenu_.open();
@@ -425,6 +434,7 @@ void Editor::touchDown(int x, int y, uint64_t now) {
     if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y), now);
     if (panel_.covers(x, y)) return perform(panel_.hit(x, y), now);
     if (paperMenu_.covers(x, y)) return perform(paperMenu_.hit(x, y), now);
+    if (math_.open()) return math_.covers(x, y) ? mathTap(x, y) : closeMath();
     for (const OverlayButton& b : overlayButtons_)
         if (sel_.active && b.r.contains(x, y)) return perform(b.action, now);
     // Fingers don't draw, so a tap elsewhere just puts the tools or the menu away.
@@ -658,27 +668,88 @@ IRect Editor::selectionButton(Action a) const {
     return {};
 }
 
-// The buttons go above the frame if there's room, else below; on the page either
+// The selection's menu: what to do with the strokes, then the math on the numbers
+// written in them. Above the frame if there's room, else below; on the page either
 // way, and not under the tools tab.
 void Editor::layoutOverlay() {
     overlayButtons_.clear();
     const IRect f = selectionFrame();
-    const std::vector<std::pair<Action, std::string>> specs = {
-        {Action::Delete, "DELETE"}, {Action::Duplicate, "DUPLICATE"}, {Action::Cancel, "DONE"}};
+    const std::vector<std::vector<std::pair<Action, std::string>>> rows = {
+        {{Action::Delete, "DELETE"}, {Action::Duplicate, "DUPLICATE"}, {Action::Cancel, "DONE"}},
+        {{Action::MathSum, "SUM"},
+         {Action::MathAverage, "AVERAGE"},
+         {Action::MathMin, "MIN"},
+         {Action::MathMax, "MAX"},
+         {Action::MathCount, "COUNT"}},
+    };
     const int h = 96, gap = 12;
-    int total = -gap;
-    for (const auto& [a, label] : specs) total += Canvas::textWidth(label, kOverlayScale) + 48 + gap;
-    int y0 = f.y0 - 20 - h;
-    if (y0 < pageArea_.y0 + 10) y0 = std::min(f.y1 + kHandle + 20, pageArea_.y1 - 10 - h);
-    const IRect tab = panel_.tabRect();
-    const int minX = (y0 < tab.y1 && y0 + h > tab.y0 ? tab.x1 : pageArea_.x0) + 10;
-    const int x0 = std::clamp(f.x0, minX, std::max(minX, pageArea_.x1 - 10 - total));
-    int x = x0;
-    for (const auto& [a, label] : specs) {
-        const int w = Canvas::textWidth(label, kOverlayScale) + 48;
-        overlayButtons_.push_back({a, label, {x, y0, x + w, y0 + h}});
-        x += w + gap;
+    const int height = static_cast<int>(rows.size()) * (h + gap) - gap;
+    int total = 0;
+    for (const auto& row : rows) {
+        int w = -gap;
+        for (const auto& [a, label] : row) w += Canvas::textWidth(label, kOverlayScale) + 48 + gap;
+        total = std::max(total, w);
     }
+    int y0 = f.y0 - 20 - height;
+    if (y0 < pageArea_.y0 + 10) y0 = std::min(f.y1 + kHandle + 20, pageArea_.y1 - 10 - height);
+    const IRect tab = panel_.tabRect();
+    const int minX = (y0 < tab.y1 && y0 + height > tab.y0 ? tab.x1 : pageArea_.x0) + 10;
+    const int x0 = std::clamp(f.x0, minX, std::max(minX, pageArea_.x1 - 10 - total));
+    int y = y0;
+    for (const auto& row : rows) {
+        int x = x0;
+        for (const auto& [a, label] : row) {
+            const int w = Canvas::textWidth(label, kOverlayScale) + 48;
+            overlayButtons_.push_back({a, label, {x, y, x + w, y + h}});
+            x += w + gap;
+        }
+        y += h + gap;
+    }
+}
+
+// Reads the numbers written in the selection and shows the answer, with what was read.
+void Editor::openMath(Action op) {
+    if (!sel_.active) return;
+    std::vector<Stroke> strokes;  // in the order they were written
+    const auto& els = currentPage().layers[sel_.layer].elements;
+    for (size_t i : sel_.indices) {
+        const Stroke& s = std::get<Stroke>(els[i]);
+        if (s.tool == StrokeTool::Pen) strokes.push_back(s);
+    }
+    const auto start = std::chrono::steady_clock::now();
+    if (!digits_) {
+        digits_ = std::make_unique<DigitReader>();
+        if (!opts_.digitExamplesPath.empty()) digits_->loadExamples(opts_.digitExamplesPath);
+    }
+    std::vector<ReadNumber> numbers = readNumbers(strokes, *digits_);
+    size_t chars = 0;
+    for (const ReadNumber& n : numbers) chars += n.chars.size();
+    std::fprintf(stderr, "scrible: read %zu numbers (%zu characters, %zu of your own examples) in %.0f ms\n",
+                 numbers.size(), chars, digits_->exampleCount(),
+                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    math_.show(op, std::move(numbers));
+    math_.draw(canvas_, pageArea_);
+    damage_.push_back({math_.rect(), Refresh::UI});
+}
+
+void Editor::mathTap(int x, int y) {
+    const MathPopup::Tap t = math_.tap(x, y);
+    if (t.close) return closeMath();
+    if (t.taught && digits_) {
+        // The correction is an example of the user's handwriting from now on.
+        digits_->addExample(t.features, t.digit);
+        if (!opts_.digitExamplesPath.empty()) digits_->appendExample(opts_.digitExamplesPath, t.features, t.digit);
+    }
+    if (!t.changed) return;
+    math_.draw(canvas_, math_.rect());
+    damage_.push_back({math_.rect(), Refresh::UI});
+}
+
+void Editor::closeMath() {
+    if (!math_.open()) return;
+    const IRect area = math_.rect();
+    math_.close();
+    repaint(area, Refresh::Content);
 }
 
 IRect Editor::overlayArea() const {
@@ -813,6 +884,19 @@ void Editor::duplicateSelection(uint64_t now) {
 // ---- actions ----
 
 void Editor::perform(Action a, uint64_t now) {
+    // The selection's math buttons; anything else closes their answer.
+    switch (a) {
+        case Action::None: return;
+        case Action::MathSum:
+        case Action::MathAverage:
+        case Action::MathMin:
+        case Action::MathMax:
+        case Action::MathCount:
+            closeMath();
+            return openMath(a);
+        default: closeMath(); break;
+    }
+
     // The paper menu's buttons; anything else puts the menu away.
     switch (a) {
         case Action::None: return;  // between buttons
@@ -920,6 +1004,11 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::PaperWide:
         case Action::PaperMargin:
         case Action::DeletePage:
+        case Action::MathSum:
+        case Action::MathAverage:
+        case Action::MathMin:
+        case Action::MathMax:
+        case Action::MathCount:
         case Action::Tools:
         case Action::Pen:
         case Action::Shapes:
@@ -957,6 +1046,7 @@ void Editor::setPage(size_t index) {
     chain_.valid = false;
     sel_ = Selection{};
     overlayButtons_.clear();
+    math_.close();
     xf_ = fitPage(currentPage(), pageArea_);
     settle_ = {};
     settleAt_ = 0;

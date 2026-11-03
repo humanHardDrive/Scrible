@@ -14,7 +14,8 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
-- Lasso selection: move, resize, duplicate and delete groups of strokes
+- Lasso selection: move, resize, duplicate and delete groups of strokes, or read the
+  numbers written in them and get their sum, average, minimum, maximum or count
 - Paper for each page: blank, ruled (three spacings, with or without a margin line) or
   grid (three sizes), stored the way Xournal++ stores it
 - Shape recognition, as in Xournal: lines, triangles, quadrilaterals, rectangles,
@@ -126,6 +127,14 @@ rest on the page.
   too). DELETE and DUPLICATE act on the selection, and DONE or a tap elsewhere lets go.
   Each change is one UNDO. It works on the top layer's strokes; text and images from
   desktop Xournal++ can't be selected yet.
+- The selection's menu also has SUM, AVERAGE, MIN, MAX and COUNT. Select a list of
+  numbers you've written (one per line, or several on a line with a wide gap between),
+  and Scrible reads them and shows the answer, above the numbers as it read them. It
+  knows digits, decimal points, minus signs and thousands commas. Tap a character that
+  was misread to correct it; corrected digits become examples of your handwriting
+  (kept in `notebooks/.scrible-digits`), so it reads you better as you go. Reading
+  happens on the Kindle, from the strokes, by comparison with handwriting samples from
+  44 people (UCI's "Pen-Based Recognition of Handwritten Digits", CC BY 4.0).
 
 - SHAPE switches shape recognition on or off; its box is filled while it's on. With it
   on, strokes that look like a line, triangle, rectangle, circle and so on are replaced
