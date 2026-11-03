@@ -81,15 +81,12 @@ KindleModding stack with scriptlet support. KUAL isn't used: it no longer works.
 ### Install and first run
 
 1. Connect the Kindle to your computer and copy the **contents** of `dist/kindle-root/`
-   onto it. That gives `scrible/` (the app; your notebooks go here too) and two
-   scriptlets in `documents/`. On a Mac, use an MTP app such as OpenMTP.
-2. Eject. Two new entries appear in the library. Open **Scrible Input Test**,
-   write near each corner and tap each corner with a finger. The marks should land under
-   the pen tip and your finger. It ends by itself after 30 s. If the marks are off, see
-   Troubleshooting below.
-3. Open **Scrible**. It starts on the list of notebooks, which are the `.xopp` and
-   `.xoj` files in `scrible/notebooks/`. Copy files from desktop Xournal++ there to
-   open them on the Kindle. The log is `scrible/scrible.log`.
+   onto it. That gives `scrible/` (the app; your notebooks go here too) and a
+   scriptlet in `documents/`. On a Mac, use an MTP app such as OpenMTP.
+2. Eject, and open **Scrible**, which is now in the library. It starts on the list of
+   notebooks, which are the `.xopp` and `.xoj` files in `scrible/notebooks/`. Copy files
+   from desktop Xournal++ there to open them on the Kindle. The log is
+   `scrible/scrible.log`.
 
 Upgrading from Xournal-Scribe, this app's old name: on the first start, Scrible moves the
 notebooks from `xournal-scribe/notebooks/` (or a version 0.1 `notebook.xopp`) into

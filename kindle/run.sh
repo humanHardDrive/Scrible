@@ -1,9 +1,9 @@
 #!/bin/sh
-# Starts Scrible. Normally run by the library scriptlets in /mnt/us/documents
+# Starts Scrible. Normally run by the library scriptlet in /mnt/us/documents
 # (via sh_integration, as root) or by `kpm launch scrible`.
 # Gets the Kindle UI out of the way (the same steps KOReader takes on firmware 5.x),
 # runs the app, then puts everything back. Extra arguments go to the app,
-# e.g. `run.sh --probe 30`.
+# e.g. `run.sh --probe 30` (over SSH) to check pen and touch input.
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 NOTEBOOKS="${APP_DIR}/notebooks"
@@ -44,6 +44,10 @@ if [ -d "${OLD_DIR}" ] && [ "${OLD_DIR}" != "${APP_DIR}" ]; then
         "${OLD_DIR}/xscribe.log" "${OLD_DIR}/xscribe.log.tmp"
     rmdir "${OLD_DIR}/notebooks" "${OLD_DIR}" 2>/dev/null
 fi
+
+# Versions before 1.0 also had an "Input Test" library entry; remove it if it's still ours.
+INPUT_TEST=/mnt/us/documents/scrible-input-test.sh
+grep -q "${APP_DIR}/run.sh --probe" "${INPUT_TEST}" 2>/dev/null && rm -f "${INPUT_TEST}"
 
 STATUSBAR_STOPPED=no
 RESTORED=no

@@ -39,8 +39,9 @@ The numbering differs from [koreader#11156](https://github.com/koreader/koreader
   BTN_TOUCH (contact), BTN_STYLUS/BTN_STYLUS2 (side buttons). The side button
   highlights, as the native notebook's default does; the eraser end erases.
 
-Use the "Scrible Input Test" library entry to re-check orientation; fix it with
-`--pen-transform` / `--touch-transform` if needed.
+Re-check orientation over SSH with `sh /mnt/us/scrible/run.sh --probe 30`, which marks
+where the app sees the pen and fingers; fix it with `--pen-transform` /
+`--touch-transform` if needed.
 
 ## Display
 
