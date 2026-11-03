@@ -2627,13 +2627,21 @@ TEST(selection_math_reads_and_can_be_corrected) {
     tap(m.doneRect());
     CHECK(!m.open());
 
-    // Undo: the correction, then the answer itself.
+    // Undo: the correction, then the answer itself, its i too. (Let go of the selection
+    // first: putting its frame away would repaint the i's place anyway.)
+    e.penDown({1700, 2400, 0.5, false}, t += 10);
+    e.penUp(t += 10);
+    flush();
+    CHECK(e.selection().empty());
     e.perform(Action::Undo, t += 10);
     flush();
     CHECK(answer(0).text == "-10.5");
+    const IRect info = e.answerInfoButton(e.answers()[0]);  // where it is now (the answer is wider again)
+    CHECK(e.canvas().at(info.x0 + 1, info.y0 + 1) == 0);    // the i's frame
     e.perform(Action::Undo, t += 10);
     flush();
     CHECK(e.answers().empty());
+    CHECK(e.canvas().at(info.x0 + 1, info.y0 + 1) != 0);  // gone from the page
     e.perform(Action::Redo, t += 10);
     e.perform(Action::Redo, t += 10);
     flush();
