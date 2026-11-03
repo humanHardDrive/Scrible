@@ -3,16 +3,16 @@
 #include <cmath>
 #include <vector>
 
+#include "Paper.h"
+
 namespace scrible {
 namespace {
 
 constexpr double kMinRadius = 0.6;  // px; keeps hairlines visible
 
-// Ruling geometry of the original Xournal, in points.
-constexpr double kRulingSpacing = 24.0;
-constexpr double kRulingTopMargin = 80.0;
-constexpr double kRulingLeftMargin = 72.0;
-constexpr double kGraphSpacing = 14.17;
+// Ruling geometry of Xournal++, in points (spacings and the margin are in Paper.h).
+constexpr double kRulingTopMargin = 80.0;     // no lines in the header...
+constexpr double kRulingBottomMargin = 60.0;  // ...or the footer
 constexpr double kRulingThickness = 0.5;
 // The desktop ruling colors (light blue, pink) come out mid-gray on e-ink, which is too
 // loud behind handwriting, so rulings are drawn in light grays instead.
@@ -124,16 +124,30 @@ void drawBackground(Canvas& c, const Page& p, const PageTransform& t, const IRec
         c.fill(IRect{x, pr.y0, x + thick, pr.y1}.intersected(pr), g);
     };
 
+    // The spacing a file asks for, within reason (a tiny one would take forever to draw).
+    auto spacing = [&](double fallback) {
+        const double s = backgroundSetting(p.background, "r1", fallback);
+        return s >= 2 ? s : fallback;
+    };
+
     if (style == "lined" || style == "ruled") {
-        for (double y = kRulingTopMargin; y < p.height - 1; y += kRulingSpacing) hline(y, kRulingGray);
-        if (style == "lined") vline(kRulingLeftMargin, kMarginGray);
+        const double s = spacing(kDefaultRuledSpacing);
+        for (int i = 0; kRulingTopMargin + i * s <= p.height - kRulingBottomMargin; ++i)
+            hline(kRulingTopMargin + i * s, kRulingGray);
+        if (style == "lined") {
+            const double m = backgroundSetting(p.background, "m1", kDefaultMarginX);
+            vline(m < 0 ? p.width + m : m, kMarginGray);  // negative: from the right edge
+        }
     } else if (style == "graph") {
-        for (double x = kGraphSpacing; x < p.width - 1; x += kGraphSpacing) vline(x, kRulingGray);
-        for (double y = kGraphSpacing; y < p.height - 1; y += kGraphSpacing) hline(y, kRulingGray);
+        // Lines on multiples of the square size, none on the page's edges.
+        const double s = spacing(kDefaultGraphSpacing), edge = kRulingThickness / 2;
+        for (int i = 1; i * s <= p.width - edge; ++i) vline(i * s, kRulingGray);
+        for (int i = 1; i * s <= p.height - edge; ++i) hline(i * s, kRulingGray);
     } else if (style == "dotted") {
         const int d = thick * 2;
-        for (double y = kGraphSpacing; y < p.height - 1; y += kGraphSpacing) {
-            for (double x = kGraphSpacing; x < p.width - 1; x += kGraphSpacing) {
+        const double s = spacing(kDefaultGraphSpacing);
+        for (double y = s; y < p.height - 1; y += s) {
+            for (double x = s; x < p.width - 1; x += s) {
                 const int sx = static_cast<int>(std::lround(t.toScreenX(x))) - d / 2;
                 const int sy = static_cast<int>(std::lround(t.toScreenY(y))) - d / 2;
                 c.fill(IRect{sx, sy, sx + d, sy + d}.intersected(pr), kMarginGray);

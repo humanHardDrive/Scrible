@@ -13,6 +13,7 @@
 
 #include "Canvas.h"
 #include "Document.h"
+#include "PaperMenu.h"
 #include "Renderer.h"
 #include "ToolPanel.h"
 #include "Toolbar.h"
@@ -67,6 +68,7 @@ public:
     const Document& document() const { return doc_; }
     const Toolbar& toolbar() const { return toolbar_; }
     const ToolPanel& toolPanel() const { return panel_; }
+    const PaperMenu& paperMenu() const { return paperMenu_; }
     const std::string& path() const { return path_; }
     size_t pageIndex() const { return page_; }
     ToolKind tool() const { return tool_; }
@@ -114,11 +116,12 @@ private:
         Element element;
     };
     struct UndoAction {
-        enum class Kind { Edit, AddPage } kind = Kind::Edit;
+        enum class Kind { Edit, AddPage, DeletePage, Background } kind = Kind::Edit;
         size_t page = 0;
         size_t layer = 0;
         std::vector<ElementEdit> edits;  // Edit: drawing a stroke, or an eraser gesture
-        std::optional<Page> pageData;    // AddPage: filled while undone
+        std::optional<Page> pageData;    // AddPage: filled while undone; DeletePage: while done
+        Background background{};         // Background: the page's other one (swapped in and out)
     };
     enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag };
     enum class DragKind { Move, Resize };
@@ -170,6 +173,11 @@ private:
     void refreshPanel(const std::vector<IRect>& before);
     void closePanel();
     void keepPanelOnTop(const IRect& r);
+    PaperMenuState paperMenuState() const;
+    void openPaperMenu();
+    void changePaper(Action a, uint64_t now);
+    void closePaperMenu();
+    void deletePage(uint64_t now);
     void updateToolbar();
     void markModified(uint64_t now);
     void setStatus(const std::string& text, uint64_t now, uint64_t durationMs = 1500);
@@ -181,7 +189,10 @@ private:
     Toolbar toolbar_;
     IRect pageArea_;
     ToolPanel panel_;
-    bool closePanelOnUp_ = false;  // the pen came down beside the open panel
+    PaperMenu paperMenu_;
+    Background paperBefore_;       // the page's paper when the menu opened
+    bool deleteArmed_ = false;     // DELETE PAGE tapped once
+    bool closePanelOnUp_ = false;  // the pen came down beside the open panel or paper menu
     Document doc_;
     std::string path_;
     size_t page_ = 0;

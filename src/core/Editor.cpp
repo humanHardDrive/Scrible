@@ -26,7 +26,7 @@ constexpr double kEraserWidths[] = {2.83, 8.50, 19.84};
 ToolbarGroups editorToolbar(bool fromList) {
     ToolbarGroups g = {
         {{Action::Undo, "UNDO"}, {Action::Redo, "REDO"}},
-        {{Action::PrevPage, "<"}, {Action::None, "000/000"}, {Action::NextPage, ">"}},
+        {{Action::PageStyle, "PAGE"}, {Action::PrevPage, "<"}, {Action::None, "000/000"}, {Action::NextPage, ">"}},
         {{Action::Save, "SAVE*"}},
     };
     if (fromList) g.back().insert(g.back().end(), {{Action::Exit, "BACK"}, {Action::Quit, "EXIT"}});
@@ -45,6 +45,7 @@ Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path
       toolbar_(screenWidth, opts_.toolbarHeight, editorToolbar(opts_.fromList)),
       pageArea_{0, opts_.toolbarHeight, screenWidth, screenHeight},
       panel_(pageArea_),
+      paperMenu_(toolbar_.buttonRect(Action::PageStyle), pageArea_),
       doc_(std::move(doc)),
       path_(std::move(path)),
       sizes_(opts_.sizes),
@@ -84,8 +85,13 @@ double Editor::pointWidth(const PenSample& s) const {
 
 ToolbarState Editor::toolbarState() const {
     ToolbarState s;
-    if (undo_.empty()) s.disabled.push_back(Action::Undo);
-    if (redo_.empty()) s.disabled.push_back(Action::Redo);
+    // A change in the open paper menu becomes an undo step when the menu closes, which UNDO does.
+    const Background& bg = doc_.pages[page_].background;
+    const bool paperChanged = paperMenu_.open() && (bg.style != paperBefore_.style || bg.config != paperBefore_.config);
+    if (undo_.empty() && !paperChanged) s.disabled.push_back(Action::Undo);
+    if (redo_.empty() || paperChanged) s.disabled.push_back(Action::Redo);
+    if (paperMenu_.open()) s.active.push_back(Action::PageStyle);
+    if (bg.type != "solid" && doc_.pages.size() < 2) s.disabled.push_back(Action::PageStyle);  // nothing to offer
     s.labels = {{Action::Save, modified_ ? "SAVE*" : "SAVE"}};
     s.text = !status_.empty() ? status_ : std::to_string(page_ + 1) + "/" + std::to_string(doc_.pages.size());
     return s;
@@ -125,10 +131,11 @@ void Editor::repaint(const IRect& r, Refresh mode) {
     damage_.push_back({area, mode});
 }
 
-// What goes over the page: the selection's frame and buttons, then the tools panel.
+// What goes over the page: the selection's frame and buttons, the tools panel, the paper menu.
 void Editor::drawChrome(const IRect& clip) {
     if (sel_.active) drawOverlay(clip);
     panel_.draw(canvas_, panelState(), clip);
+    paperMenu_.draw(canvas_, clip);
 }
 
 // Shows the panel's new state. Covering more of the page (or changing in place)
@@ -158,13 +165,102 @@ void Editor::closePanel() {
     refreshPanel(before);
 }
 
-// Ink and the lasso's dots are drawn straight onto the canvas: the panel stays on top.
+// Ink and the lasso's dots are drawn straight onto the canvas: the panel and the
+// paper menu stay on top.
 void Editor::keepPanelOnTop(const IRect& r) {
     for (const IRect& p : panel_.rects()) {
         if (p.intersected(r).empty()) continue;
         panel_.draw(canvas_, panelState(), r);
+        break;
+    }
+    paperMenu_.draw(canvas_, r);
+}
+
+PaperMenuState Editor::paperMenuState() const {
+    const Background& bg = doc_.pages[page_].background;
+    // A PDF or image page keeps its background.
+    return {paperOf(bg), bg.type == "solid", doc_.pages.size() > 1, deleteArmed_};
+}
+
+void Editor::openPaperMenu() {
+    const PaperMenuState s = paperMenuState();
+    if (!s.paperChoices && !s.canDelete) return;
+    closePanel();
+    paperBefore_ = currentPage().background;
+    paperMenu_.show(s);
+    paperMenu_.draw(canvas_, pageArea_);
+    damage_.push_back({paperMenu_.rect(), Refresh::UI});
+    updateToolbar();
+}
+
+// Changes the page's paper right away, so it can be seen behind the menu.
+void Editor::changePaper(Action a, uint64_t now) {
+    if (!paperMenu_.open() || currentPage().background.type != "solid") return;
+    Background& bg = currentPage().background;
+    Paper p = paperOf(bg).value_or(Paper{});
+    const PaperKind kind = a == Action::PaperBlank   ? PaperKind::Blank
+                           : a == Action::PaperRuled ? PaperKind::Ruled
+                                                     : PaperKind::Grid;
+    switch (a) {
+        case Action::PaperBlank:
+        case Action::PaperRuled:
+        case Action::PaperGrid:
+            if (p.kind == kind) return;
+            if (kind == PaperKind::Ruled && p.kind != PaperKind::Ruled) p.margin = true;
+            if (p.spacing < 0) p.spacing = 1;  // coming from blank, or from a spacing of the other kind's
+            p.kind = kind;
+            break;
+        case Action::PaperNarrow: p.spacing = 0; break;
+        case Action::PaperMedium: p.spacing = 1; break;
+        case Action::PaperWide: p.spacing = 2; break;
+        case Action::PaperMargin: p.margin = !p.margin; break;
+        default: return;
+    }
+    const Background before = bg;
+    setPaper(bg, p);
+    if (bg.style == before.style && bg.config == before.config) return;
+    markModified(now);
+    deleteArmed_ = false;
+    paperMenu_.show(paperMenuState());
+    repaint(pageArea_, Refresh::Content);  // with the menu on top
+    updateToolbar();                       // UNDO is available now
+}
+
+void Editor::closePaperMenu() {
+    closePanelOnUp_ = false;
+    deleteArmed_ = false;
+    if (!paperMenu_.open()) return;
+    const IRect area = paperMenu_.rect();
+    paperMenu_.close();
+    // All the changes made while it was open are one undo step.
+    const Background& bg = currentPage().background;
+    if (bg.style != paperBefore_.style || bg.config != paperBefore_.config) {
+        UndoAction u{UndoAction::Kind::Background, page_, 0, {}, std::nullopt};
+        u.background = paperBefore_;
+        pushUndo(std::move(u));
+    }
+    repaint(area, Refresh::Content);
+    updateToolbar();
+}
+
+// The first tap only arms DELETE PAGE; the second deletes the page, and one UNDO
+// brings it back.
+void Editor::deletePage(uint64_t now) {
+    if (!paperMenu_.open() || doc_.pages.size() < 2) return;
+    if (!deleteArmed_) {
+        deleteArmed_ = true;
+        paperMenu_.show(paperMenuState());
+        paperMenu_.draw(canvas_, pageArea_);
+        damage_.push_back({paperMenu_.rect(), Refresh::UI});
         return;
     }
+    closePaperMenu();  // a paper change made in this visit becomes its own undo step first
+    UndoAction u{UndoAction::Kind::DeletePage, page_, 0, {}, std::move(doc_.pages[page_])};
+    doc_.pages.erase(doc_.pages.begin() + static_cast<std::ptrdiff_t>(page_));
+    pushUndo(std::move(u));
+    markModified(now);
+    setPage(std::min(page_, doc_.pages.size() - 1));
+    setStatus("DELETED", now);
 }
 
 void Editor::updateToolbar() {
@@ -217,14 +313,14 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         perform(toolbar_.hit(x, y), now);
         return;
     }
-    if (panel_.covers(x, y)) {
+    if (panel_.covers(x, y) || paperMenu_.covers(x, y)) {
         gesture_ = Gesture::Toolbar;
-        perform(panel_.hit(x, y), now);
+        perform(panel_.covers(x, y) ? panel_.hit(x, y) : paperMenu_.hit(x, y), now);
         return;
     }
-    // Writing beside the open panel puts it away, once the pen lifts: repainting
-    // what it covers needs the slow waveform, which mustn't delay the ink.
-    closePanelOnUp_ = panel_.open();
+    // Writing beside the open panel or menu puts it away, once the pen lifts:
+    // repainting what it covers needs the slow waveform, which mustn't delay the ink.
+    closePanelOnUp_ = panel_.open() || paperMenu_.open();
     if (sel_.active) {
         for (const OverlayButton& b : overlayButtons_) {
             if (!b.r.contains(x, y)) continue;
@@ -315,16 +411,22 @@ void Editor::penUp(uint64_t now) {
     }
     pendingErase_ = UndoAction{};
     gesture_ = Gesture::None;
-    if (closePanelOnUp_) closePanel();
+    if (closePanelOnUp_) {
+        closePanel();
+        closePaperMenu();
+    }
 }
 
 void Editor::touchDown(int x, int y, uint64_t now) {
     if (gesture_ != Gesture::None) return;  // the pen is busy; this is a palm
     if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y), now);
     if (panel_.covers(x, y)) return perform(panel_.hit(x, y), now);
+    if (paperMenu_.covers(x, y)) return perform(paperMenu_.hit(x, y), now);
     for (const OverlayButton& b : overlayButtons_)
         if (sel_.active && b.r.contains(x, y)) return perform(b.action, now);
-    closePanel();  // fingers don't draw, so a tap elsewhere just puts the tools away
+    // Fingers don't draw, so a tap elsewhere just puts the tools or the menu away.
+    closePanel();
+    closePaperMenu();
 }
 
 void Editor::commitStroke(uint64_t now) {
@@ -708,10 +810,27 @@ void Editor::duplicateSelection(uint64_t now) {
 // ---- actions ----
 
 void Editor::perform(Action a, uint64_t now) {
+    // The paper menu's buttons; anything else puts the menu away.
+    switch (a) {
+        case Action::None: return;  // between buttons
+        case Action::PageStyle:
+            if (paperMenu_.open()) closePaperMenu();
+            else openPaperMenu();
+            return;
+        case Action::PaperBlank:
+        case Action::PaperRuled:
+        case Action::PaperGrid:
+        case Action::PaperNarrow:
+        case Action::PaperMedium:
+        case Action::PaperWide:
+        case Action::PaperMargin: return changePaper(a, now);
+        case Action::DeletePage: return deletePage(now);
+        default: closePaperMenu(); break;
+    }
+
     // The tools panel's buttons (and their keyboard shortcuts).
     const std::vector<IRect> panelBefore = panel_.rects();
     switch (a) {
-        case Action::None: return;  // between buttons
         case Action::Tools:
             panel_.setOpen(!panel_.open());
             return refreshPanel(panelBefore);
@@ -793,6 +912,15 @@ void Editor::perform(Action a, uint64_t now) {
             }
             return;
         case Action::None:  // handled above
+        case Action::PageStyle:
+        case Action::PaperBlank:
+        case Action::PaperRuled:
+        case Action::PaperGrid:
+        case Action::PaperNarrow:
+        case Action::PaperMedium:
+        case Action::PaperWide:
+        case Action::PaperMargin:
+        case Action::DeletePage:
         case Action::Tools:
         case Action::Pen:
         case Action::Shapes:
@@ -828,6 +956,7 @@ void Editor::addPage(uint64_t now) {
     if (cur.background.type == "solid") {
         p.background.color = cur.background.color;
         p.background.style = cur.background.style;
+        p.background.config = cur.background.config;
     }
     doc_.pages.insert(doc_.pages.begin() + static_cast<std::ptrdiff_t>(page_ + 1), std::move(p));
     pushUndo({UndoAction::Kind::AddPage, page_ + 1, 0, {}, std::nullopt});
@@ -890,8 +1019,15 @@ RectF Editor::apply(UndoAction& a, bool forward) {
         els.insert(els.begin() + static_cast<std::ptrdiff_t>(i), std::move(e));
     };
 
-    if (a.kind == UndoAction::Kind::AddPage) {
-        if (forward) {
+    if (a.kind == UndoAction::Kind::Background) {
+        Page& p = doc_.pages[a.page];
+        std::swap(p.background, a.background);
+        changed.add(0, 0);
+        changed.add(p.width, p.height);
+        return changed;
+    }
+    if (a.kind == UndoAction::Kind::AddPage || a.kind == UndoAction::Kind::DeletePage) {
+        if (forward == (a.kind == UndoAction::Kind::AddPage)) {
             doc_.pages.insert(doc_.pages.begin() + static_cast<std::ptrdiff_t>(a.page), std::move(*a.pageData));
             a.pageData.reset();
         } else {
@@ -936,7 +1072,7 @@ void Editor::redo(uint64_t now) {
     UndoAction a = std::move(redo_.back());
     redo_.pop_back();
     const RectF changed = apply(a, true);
-    const size_t page = a.page;
+    const size_t page = a.kind == UndoAction::Kind::DeletePage ? std::min(a.page, doc_.pages.size() - 1) : a.page;
     undo_.push_back(std::move(a));
     afterHistoryChange(page, changed, now);
 }

@@ -16,6 +16,7 @@
 #include "EinkPanel.h"
 #include "Eraser.h"
 #include "Lasso.h"
+#include "Paper.h"
 #include "Shapes.h"
 #include "Renderer.h"
 #include "XoppFile.h"
@@ -375,7 +376,8 @@ TEST(toolbar_layout_fits) {
         const Editor e(width, 1200, Document{}, tempPath("toolbar-fit.xopp"));
         const Toolbar& tb = e.toolbar();
         int lastRight = 0;
-        for (Action a : {Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage, Action::Save, Action::Exit}) {
+        for (Action a : {Action::Undo, Action::Redo, Action::PageStyle, Action::PrevPage, Action::NextPage, Action::Save,
+                         Action::Exit}) {
             const IRect r = tb.buttonRect(a);
             CHECK(!r.empty());
             CHECK(r.x0 >= lastRight && r.x1 <= width);
@@ -1119,8 +1121,8 @@ TEST(editor_toolbar_with_back_and_exit_fits) {
     for (int width : {1072, 1236, 1860, 1986}) {  // Kindle screen widths
         const Editor e(width, 2400, Document{}, tempPath("toolbar-list.xopp"), o);
         int lastRight = 0;
-        for (Action a : {Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage, Action::Save, Action::Exit,
-                         Action::Quit}) {
+        for (Action a : {Action::Undo, Action::Redo, Action::PageStyle, Action::PrevPage, Action::NextPage, Action::Save,
+                         Action::Exit, Action::Quit}) {
             const IRect r = e.toolbar().buttonRect(a);
             CHECK(!r.empty() && r.x0 >= lastRight && r.x1 <= width);
             lastRight = r.x1;
@@ -1675,6 +1677,297 @@ TEST(tool_panel_opens_picks_and_puts_itself_away) {
     CHECK(!del.empty() && (del.x0 >= tab.x1 || del.y0 >= tab.y1 || del.y1 <= tab.y0));
 
     // Through all of it, the fast refreshes left nothing stale on the panel.
+    e.onIdle(t += 1000);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+}
+
+// ---- paper: per-page backgrounds ----
+
+TEST(paper_settings_and_presets) {
+    Background b;
+    b.config = "f1=0xbdbdbd,r1=18.5,m1=-72,r10=3";
+    CHECK_NEAR(backgroundSetting(b, "r1", 24), 18.5, 1e-9);
+    CHECK_NEAR(backgroundSetting(b, "m1", 72), -72, 1e-9);
+    CHECK_NEAR(backgroundSetting(b, "r10", 0), 3, 1e-9);
+    CHECK_NEAR(backgroundSetting(b, "lw", 0.5), 0.5, 1e-9);  // not there
+    b.config = "r1=abc,m1";
+    CHECK_NEAR(backgroundSetting(b, "r1", 24), 24, 1e-9);
+    CHECK_NEAR(backgroundSetting(b, "m1", 72), 72, 1e-9);
+
+    // Each choice is stored the way Xournal++ stores it, defaults left out.
+    struct Case {
+        Paper paper;
+        const char* style;
+        const char* config;
+    };
+    for (const Case& c : {Case{{PaperKind::Blank, -1, false}, "plain", ""},
+                          Case{{PaperKind::Ruled, 0, true}, "lined", "r1=18"},
+                          Case{{PaperKind::Ruled, 1, true}, "lined", ""},
+                          Case{{PaperKind::Ruled, 2, false}, "ruled", "r1=30"},
+                          Case{{PaperKind::Grid, 0, false}, "graph", ""},
+                          Case{{PaperKind::Grid, 1, false}, "graph", "r1=21.26"},
+                          Case{{PaperKind::Grid, 2, false}, "graph", "r1=28.35"}}) {
+        Background bg;
+        bg.color = 0xffffc0;
+        bg.xml = "<background type=\"solid\" style=\"dotted\"/>";
+        setPaper(bg, c.paper);
+        CHECK(bg.style == c.style && bg.config == c.config && bg.xml.empty() && bg.color == 0xffffc0);
+        const auto back = paperOf(bg);
+        CHECK(back && back->kind == c.paper.kind);
+        if (back && c.paper.kind != PaperKind::Blank) CHECK(back->spacing == c.paper.spacing);
+        if (back && c.paper.kind == PaperKind::Ruled) CHECK(back->margin == c.paper.margin);
+    }
+    // A spacing that isn't one of ours is kept when only the margin changes.
+    Background custom;
+    custom.style = "lined";
+    custom.config = "r1=20";
+    CHECK(paperOf(custom)->spacing == -1);
+    setPaper(custom, {PaperKind::Ruled, -1, false});
+    CHECK(custom.style == "ruled" && custom.config == "r1=20");
+    custom.style = "dotted";
+    CHECK(!paperOf(custom));
+    custom.type = "pdf";
+    custom.style = "plain";
+    CHECK(!paperOf(custom));
+}
+
+TEST(paper_config_round_trips_through_xopp) {
+    Document d;
+    d.pages.push_back(makeBlankPage(200, 300, "lined"));
+    d.pages.push_back(makeBlankPage(200, 300, "lined"));
+    setPaper(d.pages[1].background, {PaperKind::Grid, 2, false});
+    std::string err;
+    const std::string path = tempPath("paper.xopp");
+    CHECK(saveXopp(path, d, err));
+    Document back;
+    CHECK(loadXopp(path, back, err));
+    CHECK(back.pages.size() == 2);
+    if (back.pages.size() != 2) return;
+    CHECK(back.pages[0].background.style == "lined" && back.pages[0].background.config.empty());
+    CHECK(back.pages[1].background.style == "graph" && back.pages[1].background.config == "r1=28.35");
+    CHECK(back.pages[1].background.xml.find("config=\"r1=28.35\"") != std::string::npos);
+}
+
+TEST(draws_paper_spacing_margin_and_footer) {
+    auto page = [](const char* style, const char* config) {
+        Page p = makeBlankPage(200, 200, style);
+        p.background.config = config;
+        return p;
+    };
+    {
+        Canvas c(200, 200);
+        drawPage(c, page("ruled", "r1=30"), PageTransform{}, c.rect());
+        CHECK(c.at(100, 80) == 200 && c.at(100, 110) == 200 && c.at(100, 140) == 200);
+        CHECK(c.at(100, 104) == 255);
+        CHECK(c.at(100, 170) == 255);  // in the 60pt footer, like Xournal++
+        CHECK(c.at(72, 150) == 255);   // no margin line
+    }
+    {
+        Canvas c(200, 200);
+        drawPage(c, page("lined", "m1=-72"), PageTransform{}, c.rect());
+        CHECK(c.at(128, 150) == 170 && c.at(72, 150) == 255);  // margin on the right
+    }
+    {
+        Canvas c(200, 200);
+        drawPage(c, page("graph", "r1=20"), PageTransform{}, c.rect());
+        CHECK(c.at(20, 5) == 200 && c.at(40, 5) == 200 && c.at(5, 60) == 200);
+        CHECK(c.at(30, 5) == 255 && c.at(0, 5) == 255);
+    }
+    {
+        Canvas c(200, 200);
+        drawPage(c, page("graph", "r1=0"), PageTransform{}, c.rect());  // nonsense: the default
+        CHECK(c.at(14, 5) == 200);
+    }
+}
+
+TEST(paper_menu_changes_this_page_only) {
+    EditorOptions o;
+    o.render.antialias = false;
+    const std::string path = tempPath("paper-menu.xopp");
+    Editor e(1860, 2480, Document{}, path, o);
+    EinkPanel panel(1860, 2480);
+    std::vector<Damage> last;
+    auto flush = [&] {
+        last = e.takeDamage();
+        for (const Damage& d : last) panel.refresh(e.canvas(), d);
+    };
+    flush();
+    uint64_t t = 1000;
+    const PaperMenu& menu = e.paperMenu();
+    auto tapAt = [&](const IRect& r) {
+        CHECK(!r.empty());
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+    };
+    auto tap = [&](Action a) { tapAt(menu.buttonRect(a)); };
+    auto bg = [&](size_t i) { return e.document().pages[i].background; };
+
+    // PAGE opens the menu below it, quickly.
+    tapAt(e.toolbar().buttonRect(Action::PageStyle));
+    CHECK(menu.open() && menu.rect().y0 >= e.toolbar().rect().y1);
+    for (const Damage& d : last) CHECK(d.mode == Refresh::UI);
+    CHECK(!menu.buttonRect(Action::PaperMargin).empty());  // a new notebook is ruled, with a margin
+
+    // GRID, then LARGE: the page changes behind the menu; there's no margin for grids.
+    tap(Action::PaperGrid);
+    CHECK(bg(0).style == "graph" && bg(0).config == "r1=21.26");  // keeps "medium"
+    CHECK(menu.buttonRect(Action::PaperMargin).empty() && !menu.buttonRect(Action::PaperWide).empty());
+    tap(Action::PaperWide);
+    CHECK(bg(0).style == "graph" && bg(0).config == "r1=28.35");
+    CHECK(e.modified());
+
+    // PAGE again closes it; the whole visit is one undo step.
+    tapAt(e.toolbar().buttonRect(Action::PageStyle));
+    CHECK(!menu.open());
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(bg(0).style == "lined" && bg(0).config.empty());
+    e.perform(Action::Redo, t += 10);
+    flush();
+    CHECK(bg(0).style == "graph" && bg(0).config == "r1=28.35");
+
+    // A new page starts like the one before it, and then has its own paper.
+    e.perform(Action::NextPage, t += 10);
+    flush();
+    CHECK(e.pageIndex() == 1 && bg(1).style == "graph" && bg(1).config == "r1=28.35");
+    tapAt(e.toolbar().buttonRect(Action::PageStyle));
+    tap(Action::PaperRuled);
+    CHECK(bg(1).style == "lined" && bg(1).config == "r1=30");  // "large" becomes "wide"
+    tap(Action::PaperMargin);
+    tap(Action::PaperNarrow);
+    CHECK(bg(1).style == "ruled" && bg(1).config == "r1=18");
+    e.touchDown(1000, 2000, t += 10);  // a finger elsewhere closes it
+    flush();
+    CHECK(!menu.open() && bg(0).style == "graph");
+
+    // Writing beside the open menu closes it when the pen lifts, and the stroke counts.
+    tapAt(e.toolbar().buttonRect(Action::PageStyle));
+    tap(Action::PaperBlank);
+    CHECK(bg(1).style == "plain" && bg(1).config.empty());
+    CHECK(menu.buttonRect(Action::PaperNarrow).empty());
+    e.penDown({900, 1500, 0.5, false}, t += 10);
+    for (int i = 1; i <= 10; ++i) e.penMove({900.0 + 30 * i, 1500, 0.5, false}, t += 5);
+    flush();
+    e.penUp(t += 5);
+    flush();
+    CHECK(!menu.open() && e.document().pages[1].layers.back().elements.size() == 1);
+
+    e.onIdle(t += 1000);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+
+    // And it's all in the file.
+    CHECK(e.save(t += 10));
+    Document saved;
+    std::string err;
+    CHECK(loadXopp(path, saved, err) && saved.pages.size() == 2);
+    if (saved.pages.size() == 2) {
+        CHECK(saved.pages[0].background.style == "graph" && saved.pages[0].background.config == "r1=28.35");
+        CHECK(saved.pages[1].background.style == "plain");
+    }
+}
+
+TEST(paper_menu_leaves_pdf_pages_alone) {
+    Document d;
+    d.pages.push_back(makeBlankPage(446, 566, "plain"));
+    d.pages[0].background.type = "pdf";
+    d.pages[0].background.xml = "<background type=\"pdf\" domain=\"absolute\" filename=\"x.pdf\" pageno=\"1\"/>";
+    Editor e(1860, 2480, d, tempPath("paper-pdf.xopp"));
+    e.perform(Action::PageStyle, 10);
+    CHECK(!e.paperMenu().open());
+    CHECK(e.document().pages[0].background.type == "pdf" && !e.document().pages[0].background.xml.empty());
+}
+
+TEST(delete_page_takes_two_taps_and_undoes) {
+    // Three pages, told apart by how many strokes they have.
+    Document d;
+    for (int k = 0; k < 3; ++k) {
+        d.pages.push_back(makeBlankPage(446, 566, "lined"));
+        for (int i = 0; i <= k; ++i) {
+            Stroke s;
+            s.points = {{100, 200.0 + 30 * i}, {300, 200.0 + 30 * i}};
+            d.pages[k].layers[0].elements.push_back(s);
+        }
+    }
+    d.pages[2].background.type = "pdf";  // the last one has a PDF background
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, d, tempPath("delete-page.xopp"), o);
+    EinkPanel panel(1860, 2480);
+    auto flush = [&] {
+        for (const Damage& dmg : e.takeDamage()) panel.refresh(e.canvas(), dmg);
+    };
+    flush();
+    uint64_t t = 1000;
+    const PaperMenu& menu = e.paperMenu();
+    auto tapAt = [&](const IRect& r) {
+        CHECK(!r.empty());
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+    };
+    auto openMenu = [&] { tapAt(e.toolbar().buttonRect(Action::PageStyle)); };
+    auto strokesOn = [&](size_t i) { return e.document().pages[i].layers[0].elements.size(); };
+
+    // On the middle page: the first tap only arms it.
+    e.perform(Action::NextPage, t += 10);
+    openMenu();
+    tapAt(menu.buttonRect(Action::DeletePage));
+    CHECK(e.document().pages.size() == 3 && menu.open());
+    // Closing the menu disarms it.
+    openMenu();
+    openMenu();
+    tapAt(menu.buttonRect(Action::DeletePage));
+    CHECK(e.document().pages.size() == 3);
+    tapAt(menu.buttonRect(Action::DeletePage));
+    CHECK(e.document().pages.size() == 2 && !menu.open());
+    CHECK(e.pageIndex() == 1 && strokesOn(1) == 3);  // the next page takes its place
+    CHECK(e.modified());
+
+    // UNDO brings it back, where it was; REDO deletes it again.
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.document().pages.size() == 3 && e.pageIndex() == 1 && strokesOn(1) == 2);
+    e.perform(Action::Redo, t += 10);
+    flush();
+    CHECK(e.document().pages.size() == 2 && strokesOn(1) == 3);
+    e.perform(Action::Undo, t += 10);
+    flush();
+
+    // The PDF page's menu only offers DELETE PAGE; deleting the last page shows the one before.
+    e.perform(Action::NextPage, t += 10);
+    flush();
+    CHECK(e.pageIndex() == 2);
+    openMenu();
+    CHECK(menu.buttonRect(Action::PaperBlank).empty() && !menu.buttonRect(Action::DeletePage).empty());
+    tapAt(menu.buttonRect(Action::DeletePage));
+    tapAt(menu.buttonRect(Action::DeletePage));
+    CHECK(e.document().pages.size() == 2 && e.pageIndex() == 1 && strokesOn(1) == 2);
+
+    // A paper change and a delete in one visit are two undo steps.
+    openMenu();
+    tapAt(menu.buttonRect(Action::PaperGrid));
+    tapAt(menu.buttonRect(Action::DeletePage));
+    tapAt(menu.buttonRect(Action::DeletePage));
+    CHECK(e.document().pages.size() == 1);
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.document().pages.size() == 2 && e.document().pages[1].background.style == "graph");
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.document().pages[1].background.style == "lined");
+
+    // Down to one page, which can't be deleted.
+    openMenu();
+    tapAt(menu.buttonRect(Action::DeletePage));
+    tapAt(menu.buttonRect(Action::DeletePage));
+    openMenu();
+    CHECK(e.document().pages.size() == 1 && menu.open() && menu.buttonRect(Action::DeletePage).empty());
+    openMenu();
+
     e.onIdle(t += 1000);
     flush();
     CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);

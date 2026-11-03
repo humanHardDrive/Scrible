@@ -74,6 +74,7 @@ struct Background {
     std::string type = "solid";  // "solid" is drawn; "pdf"/"pixmap" are kept but drawn blank for now
     uint32_t color = 0xffffff;     // 0xRRGGBB
     std::string style = "plain";  // plain, lined, ruled, graph, dotted, ...
+    std::string config;           // Xournal++'s settings for the style, e.g. "r1=18,m1=72" (see Paper.h)
     std::string xml;              // original <background> element if loaded from a file; written back unchanged
 };
 

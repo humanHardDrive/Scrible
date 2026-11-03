@@ -15,13 +15,16 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
 - Lasso selection: move, resize, duplicate and delete groups of strokes
+- Paper for each page: blank, ruled (three spacings, with or without a margin line) or
+  grid (three sizes), stored the way Xournal++ stores it
 - Shape recognition, as in Xournal: lines, triangles, quadrilaterals, rectangles,
   circles and ellipses, plus polygons drawn as separate sides and arrows (a line, then
   a "V" at its end)
 - Pen with pressure, highlighter, and an eraser (also the pen's eraser end) that either
   cuts away just the ink it passes over, like Xournal++'s standard eraser, or removes
   whole strokes
-- Three sizes per tool, undo/redo, multiple pages (`>` on the last page adds one)
+- Three sizes per tool, undo/redo, multiple pages (`>` on the last page adds one;
+  PAGE deletes one)
 - Opens `.xopp` and `.xoj` files from Xournal++ and the original Xournal. Anything it
   can't edit yet (text, images, LaTeX, PDF backgrounds, unknown attributes) is kept and
   written back unchanged. Text is drawn roughly with a bitmap font; images show as boxes.
@@ -110,8 +113,8 @@ In the list:
   it (e.g. `Name.xopp.bg.pdf` for an annotated PDF).
 - `<` `>` page through a long list, and EXIT returns to the Kindle home screen.
 
-In a notebook the toolbar along the top has UNDO / REDO, `<` page `>`, SAVE, BACK and
-EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
+In a notebook the toolbar along the top has UNDO / REDO, PAGE, `<` page `>`, SAVE,
+BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
 page. Tap it to open a column of PEN, SHAPE, LASSO, MARK (highlighter) and ERASE. PEN,
 MARK and ERASE show their sizes beside the column, and each keeps its own. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
@@ -134,6 +137,14 @@ rest on the page.
 - ERASE also offers PARTIAL, which cuts away just what you erase, and WHOLE, which
   removes whole strokes. The pen's eraser end follows the same setting.
 - These choices and each tool's size are remembered.
+- PAGE sets this page's paper: BLANK, RULED or GRID; how far apart the lines or squares
+  are (NARROW / MEDIUM / WIDE, or SMALL / MEDIUM / LARGE); and for ruled paper, whether
+  it has a margin line. The page changes as you choose. Tap PAGE again, or anywhere
+  else, to close the menu; one UNDO undoes everything you changed in it. A new page
+  starts with the paper of the page before it. Pages with a PDF or image background
+  keep it.
+- DELETE PAGE, at the bottom of that menu, asks for a second tap before it deletes the
+  page; UNDO brings it back. A notebook's only page can't be deleted.
 - BACK saves and returns to the list; EXIT saves and leaves the app.
 
 ### Troubleshooting

@@ -5,14 +5,15 @@
 #include <iterator>
 #include <string>
 
+#include "Widgets.h"
+
 namespace scrible {
 namespace {
 
-constexpr int kScale = 3;  // 24 px glyphs, like the selection's buttons
-constexpr int kButtonH = 88, kPad = 10, kGap = 8, kBorder = 3, kTextPad = 20;
-constexpr int kTop = 24;          // between the toolbar and the tab
-constexpr int kAside = 12;        // between the column and the options
-constexpr int kBox = 30;          // SHAPE's check box
+using namespace ui;
+
+constexpr int kTop = 24;    // between the toolbar and the tab
+constexpr int kAside = 12;  // between the column and the options
 constexpr int kArrow = 16;        // the tab's arrow (twice as tall), and the space either side of it
 constexpr int kArrowPad = 28;
 
@@ -31,8 +32,6 @@ const char* label(Action a) {
         default: return "";
     }
 }
-
-int textWidth(const std::string& s) { return Canvas::textWidth(s, kScale); }
 
 }  // namespace
 
@@ -114,14 +113,7 @@ IRect ToolPanel::buttonRect(Action a) const {
 
 void ToolPanel::draw(Canvas& c, const ToolPanelState& s, const IRect& clip) const {
     auto fill = [&](const IRect& r, uint8_t v) { c.fill(r.intersected(clip), v); };
-    // Black border, white inside; all black when it's the current choice.
-    auto box = [&](const IRect& r, bool on) {
-        fill(r, 0);
-        if (!on) fill(r.grown(-kBorder), 255);
-    };
-    auto text = [&](int x, const IRect& r, const std::string& t, uint8_t v) {
-        c.drawText(x, r.y0 + (r.height() - 8 * kScale) / 2, t, kScale, v, r.intersected(clip));
-    };
+    auto box = [&](const IRect& r, bool on) { drawBox(c, r, on, clip); };
 
     if (!open_) {
         box(tab_, false);
@@ -149,17 +141,11 @@ void ToolPanel::draw(Canvas& c, const ToolPanelState& s, const IRect& clip) cons
             const int y = b.r.y0 + (b.r.height() - t) / 2;
             fill({b.r.x0 + kTextPad, y, b.r.x1 - kTextPad, y + t}, ink);
         } else if (b.action == Action::ErasePartial || b.action == Action::EraseWhole) {
-            text(b.r.x0 + (b.r.width() - textWidth(label(b.action))) / 2, b.r, label(b.action), ink);
+            drawLabel(c, b.r, -1, label(b.action), ink, clip);
         } else {
-            text(b.r.x0 + kTextPad, b.r, label(b.action), ink);
+            drawLabel(c, b.r, b.r.x0 + kTextPad, label(b.action), ink, clip);
         }
-        if (b.action == Action::Shapes) {
-            // A check box: filled while shapes are recognized.
-            const int cy = (b.r.y0 + b.r.y1) / 2;
-            const IRect check{b.r.x1 - kTextPad - kBox, cy - kBox / 2, b.r.x1 - kTextPad, cy + kBox / 2};
-            box(check, false);
-            if (s.shapes) fill(check.grown(-7), 0);
-        }
+        if (b.action == Action::Shapes) drawCheckBox(c, b.r, s.shapes, clip);  // filled while shapes are recognized
     }
 }
 

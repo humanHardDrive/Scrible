@@ -254,6 +254,7 @@ bool parseXopp(const std::string& xml, Document& doc, std::string& error, std::v
             if (!parseColor(bg.attribute("color").as_string("white"), page.background.color, kBackgroundColors))
                 page.background.color = 0xffffff;
             page.background.style = bg.attribute("style").as_string("plain");
+            page.background.config = bg.attribute("config").as_string();
             page.background.xml = nodeXml(bg);
         }
         for (const pugi::xml_node ln : pn.children("layer")) {
@@ -328,6 +329,10 @@ std::string serializeXopp(const Document& doc) {
             appendColor(out, page.background.color, 0xff);
             out += "\" style=\"";
             appendEscaped(out, page.background.style);
+            if (!page.background.config.empty()) {  // as Xournal++ writes it; the original Xournal ignores it
+                out += "\" config=\"";
+                appendEscaped(out, page.background.config);
+            }
             out += "\"/>\n";
         }
         if (page.layers.empty()) out += "<layer/>\n";  // the original Xournal needs at least one layer
