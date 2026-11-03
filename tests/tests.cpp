@@ -1973,6 +1973,37 @@ TEST(delete_page_takes_two_taps_and_undoes) {
     CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
 }
 
+TEST(pen_side_button_highlights_with_any_tool) {
+    Editor e(900, 1200, Document{}, tempPath("side-button.xopp"));
+    const auto& els = e.document().pages[0].layers.back().elements;
+    uint64_t t = 0;
+    auto stroke = [&](double y, bool eraser, bool button) {
+        e.penDown({200, y, 0.5, eraser, button}, t += 10);
+        for (int i = 1; i <= 10; ++i) e.penMove({200.0 + 30 * i, y, 0.5, eraser, button}, t += 5);
+        e.penUp(t += 5);
+    };
+    e.perform(Action::Highlighter, t += 10);
+    e.perform(Action::SizeThick, t += 10);  // the highlighter's size is the one used
+    for (Action tool : {Action::Pen, Action::Eraser, Action::Lasso}) {
+        e.perform(tool, t += 10);
+        const size_t before = els.size();
+        stroke(400.0 + 50 * before, false, true);
+        CHECK(els.size() == before + 1);
+        if (els.size() != before + 1) continue;
+        const Stroke& s = std::get<Stroke>(els.back());
+        CHECK(s.tool == StrokeTool::Highlighter && s.width > 19);
+    }
+    CHECK(e.tool() == ToolKind::Lasso);  // the button doesn't change the tool
+    // With the pen, a stroke without the button is ink again; the eraser end still erases.
+    e.perform(Action::Pen, t += 10);
+    stroke(700, false, false);
+    CHECK(els.size() == 4 && std::get<Stroke>(els.back()).tool == StrokeTool::Pen);
+    e.penDown({150, 700, 0.5, true, false}, t += 10);
+    e.penMove({600, 700, 0.5, true, false}, t += 10);
+    e.penUp(t += 10);
+    CHECK(els.size() == 3);
+}
+
 int main() {
     for (const auto& [name, fn] : registry()) {
         const int before = g_failures;

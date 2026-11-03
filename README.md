@@ -136,6 +136,8 @@ rest on the page.
   brings back what you drew.
 - ERASE also offers PARTIAL, which cuts away just what you erase, and WHOLE, which
   removes whole strokes. The pen's eraser end follows the same setting.
+- Holding the pen's side button highlights, whichever tool is selected, as in the
+  Kindle's own notebooks. It uses MARK's size.
 - These choices and each tool's size are remembered.
 - PAGE sets this page's paper: BLANK, RULED or GRID; how far apart the lines or squares
   are (NARROW / MEDIUM / WIDE, or SMALL / MEDIUM / LARGE); and for ruled paper, whether

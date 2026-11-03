@@ -210,7 +210,7 @@ void PenInput::resync() {
     if (ioctl(fd_, EVIOCGKEY(sizeof keys), keys) >= 0) {
         touching_ = testBit(keys, BTN_TOUCH);
         rubber_ = testBit(keys, BTN_TOOL_RUBBER);
-        button_ = testBit(keys, BTN_STYLUS);
+        button_ = testBit(keys, BTN_STYLUS) || testBit(keys, BTN_STYLUS2);
     }
     input_absinfo ai{};
     if (ioctl(fd_, EVIOCGABS(ABS_X), &ai) >= 0) rawX_ = ai.value;
@@ -231,7 +231,7 @@ void PenInput::read(std::vector<PenEvent>& out) {
             case EV_KEY:
                 if (e.code == BTN_TOUCH) touching_ = e.value != 0;
                 else if (e.code == BTN_TOOL_RUBBER) rubber_ = e.value != 0;
-                else if (e.code == BTN_STYLUS) button_ = e.value != 0;
+                else if (e.code == BTN_STYLUS || e.code == BTN_STYLUS2) button_ = e.value != 0;
                 return;
             case EV_ABS:
                 if (e.code == ABS_X) rawX_ = e.value;
@@ -256,13 +256,14 @@ void PenInput::read(std::vector<PenEvent>& out) {
         const double p = currentPressure();
         if (touching_ && !down_) {
             down_ = true;
-            eraser_ = rubber_ || button_;
-            out.push_back({PenEvent::Type::Down, x, y, p, eraser_});
+            eraser_ = rubber_;
+            buttonAtDown_ = button_ && !rubber_;
+            out.push_back({PenEvent::Type::Down, x, y, p, eraser_, buttonAtDown_});
         } else if (touching_) {
-            out.push_back({PenEvent::Type::Move, x, y, p, eraser_});
+            out.push_back({PenEvent::Type::Move, x, y, p, eraser_, buttonAtDown_});
         } else if (down_) {
             down_ = false;
-            out.push_back({PenEvent::Type::Up, x, y, p, eraser_});
+            out.push_back({PenEvent::Type::Up, x, y, p, eraser_, buttonAtDown_});
         }
     });
 }

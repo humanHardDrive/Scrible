@@ -7,7 +7,8 @@
 //
 // A folder (default ~/Documents/Scrible) opens the notebook list; a
 // .xopp/.xoj file opens just that notebook.
-// Mouse: left = pen, right = eraser. A drawing tablet gets real pressure.
+// Mouse: left = pen, right = eraser, middle = highlighter (like a pen's side
+// button). A drawing tablet gets real pressure.
 // Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, Cmd/Ctrl+S save,
 //       P/H/E/L pen/highlighter/eraser/lasso, 1/2/3 sizes, Delete removes the selection,
 //       Left/Right pages,
@@ -167,9 +168,12 @@ int main(int argc, char** argv) {
                     break;
 
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    if (ev.button.button != SDL_BUTTON_LEFT && ev.button.button != SDL_BUTTON_RIGHT) break;
+                    if (ev.button.button != SDL_BUTTON_LEFT && ev.button.button != SDL_BUTTON_RIGHT &&
+                        ev.button.button != SDL_BUTTON_MIDDLE)
+                        break;
                     win.toCanvas(ev.button.x, ev.button.y, x, y);
-                    app.penDown({x, y, 0.5, ev.button.button == SDL_BUTTON_RIGHT}, now);
+                    app.penDown({x, y, 0.5, ev.button.button == SDL_BUTTON_RIGHT, ev.button.button == SDL_BUTTON_MIDDLE},
+                                now);
                     mouseDrawing = true;
                     break;
                 case SDL_EVENT_MOUSE_MOTION:
@@ -188,7 +192,8 @@ int main(int argc, char** argv) {
                     break;
                 case SDL_EVENT_PEN_DOWN:
                     win.toCanvas(ev.ptouch.x, ev.ptouch.y, x, y);
-                    app.penDown({x, y, penPressure, ev.ptouch.eraser}, now);
+                    app.penDown({x, y, penPressure, ev.ptouch.eraser, (ev.ptouch.pen_state & SDL_PEN_INPUT_BUTTON_1) != 0},
+                                now);
                     break;
                 case SDL_EVENT_PEN_MOTION:
                     if (!(ev.pmotion.pen_state & SDL_PEN_INPUT_DOWN)) break;

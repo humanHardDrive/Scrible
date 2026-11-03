@@ -37,7 +37,8 @@ struct PenEvent {
     enum class Type { Down, Move, Up } type;
     double x, y;      // screen pixels
     double pressure;  // 0..1
-    bool eraser;      // eraser end, or side button held at pen-down
+    bool eraser;      // eraser end
+    bool button;      // side button held at pen-down
 };
 
 struct TouchEvent {
@@ -91,7 +92,7 @@ private:
     AxisRange pressure_;
     int rawX_ = 0, rawY_ = 0, rawP_ = 0;
     bool touching_ = false, rubber_ = false, button_ = false;
-    bool down_ = false, eraser_ = false, dropped_ = false;
+    bool down_ = false, eraser_ = false, buttonAtDown_ = false, dropped_ = false;
     bool ownPressureSeen_ = false;
 
     int pressureFd_ = -1;

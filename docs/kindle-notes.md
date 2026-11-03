@@ -36,7 +36,8 @@ The numbering differs from [koreader#11156](https://github.com/koreader/koreader
   reports pressure, it falls back to 0.5, the preset width. The log line
   `pressure from …` at exit says which source was used.
 - Pen protocol is Wacom-style: BTN_TOOL_PEN (hover), BTN_TOOL_RUBBER (eraser end),
-  BTN_TOUCH (contact), BTN_STYLUS/BTN_STYLUS2 (side buttons).
+  BTN_TOUCH (contact), BTN_STYLUS/BTN_STYLUS2 (side buttons). The side button
+  highlights, as the native notebook's default does; the eraser end erases.
 
 Use the "Scrible Input Test" library entry to re-check orientation; fix it with
 `--pen-transform` / `--touch-transform` if needed.

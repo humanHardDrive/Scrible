@@ -69,14 +69,14 @@ size_t Editor::currentLayer() {
 IRect Editor::drawingClip() const { return xf_.pageRect(doc_.pages[page_]).intersected(pageArea_); }
 
 double Editor::toolWidth() const {
-    if (tool_ == ToolKind::Highlighter) return kHighlighterWidths[static_cast<size_t>(toolSize(ToolKind::Highlighter))];
+    if (inkTool_ == ToolKind::Highlighter) return kHighlighterWidths[static_cast<size_t>(toolSize(ToolKind::Highlighter))];
     return kPenWidths[static_cast<size_t>(toolSize(ToolKind::Pen))];
 }
 
 double Editor::eraserWidth() const { return kEraserWidths[static_cast<size_t>(toolSize(ToolKind::Eraser))]; }
 
 double Editor::pointWidth(const PenSample& s) const {
-    if (tool_ == ToolKind::Highlighter) return toolWidth();
+    if (inkTool_ == ToolKind::Highlighter) return toolWidth();
     // Light touch -> 60% of the preset, medium (0.5) -> 100%, full pressure -> 140%.
     return toolWidth() * std::clamp(0.6 + 0.8 * s.pressure, 0.6, 1.4);
 }
@@ -329,20 +329,21 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
             return;
         }
         const StrokePoint p{xf_.toPageX(s.x), xf_.toPageY(s.y)};
-        if (!s.eraser && selectionHandle().grown(16).contains(x, y)) return startDrag(DragKind::Resize, p);
-        if (!s.eraser && selectionFrame().contains(x, y)) return startDrag(DragKind::Move, p);
+        const bool tip = !s.eraser && !s.button;
+        if (tip && selectionHandle().grown(16).contains(x, y)) return startDrag(DragKind::Resize, p);
+        if (tip && selectionFrame().contains(x, y)) return startDrag(DragKind::Move, p);
         clearSelection();  // tapping elsewhere lets go of it
     }
     if (!drawingClip().contains(x, y)) return;
 
-    if (tool_ == ToolKind::Lasso && !s.eraser) {
+    if (tool_ == ToolKind::Lasso && !s.eraser && !s.button) {
         gesture_ = Gesture::Lasso;
         lasso_ = {{xf_.toPageX(s.x), xf_.toPageY(s.y)}};
         lassoArea_ = {};
         lassoDots_ = 0;
         return;
     }
-    if (s.eraser || tool_ == ToolKind::Eraser) {
+    if (s.eraser || (tool_ == ToolKind::Eraser && !s.button)) {
         gesture_ = Gesture::Erase;
         pendingErase_ = UndoAction{UndoAction::Kind::Edit, page_, currentLayer(), {}, std::nullopt};
         eraserLast_.reset();
@@ -353,7 +354,8 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
 
     gesture_ = Gesture::Draw;
     live_ = Stroke{};
-    const bool hl = tool_ == ToolKind::Highlighter;
+    inkTool_ = s.button ? ToolKind::Highlighter : tool_;
+    const bool hl = inkTool_ == ToolKind::Highlighter;
     live_.tool = hl ? StrokeTool::Highlighter : StrokeTool::Pen;
     live_.color = hl ? kHighlighterColor : kPenColor;
     live_.width = toolWidth();

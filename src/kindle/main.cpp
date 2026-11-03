@@ -169,7 +169,7 @@ int probe(scrible::FbinkDisplay& display, const Args& args, const scrible::Input
         std::vector<scrible::Damage> marks;
         for (const auto& e : pe) {
             std::printf("pen   %-4s %7.1f %7.1f  pressure %.2f%s\n", kinds[static_cast<int>(e.type)], e.x, e.y,
-                        e.pressure, e.eraser ? "  eraser" : "");
+                        e.pressure, e.eraser ? "  eraser" : e.button ? "  button" : "");
             if (e.type != scrible::PenEvent::Type::Up) stats.add(e.pressure);
             const int r = 2 + static_cast<int>(e.pressure * 6);
             const scrible::IRect m{int(e.x) - r, int(e.y) - r, int(e.x) + r + 1, int(e.y) + r + 1};
@@ -283,7 +283,7 @@ int main(int argc, char** argv) {
         if (fds[0].revents & POLLIN) pen.read(penEvents);
         for (const auto& e : penEvents) {
             if (e.type != scrible::PenEvent::Type::Up) stats.add(e.pressure);
-            const scrible::PenSample s{e.x, e.y, e.pressure, e.eraser};
+            const scrible::PenSample s{e.x, e.y, e.pressure, e.eraser, e.button};
             switch (e.type) {
                 case scrible::PenEvent::Type::Down: app.penDown(s, now); break;
                 case scrible::PenEvent::Type::Move: app.penMove(s, now); break;

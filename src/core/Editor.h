@@ -40,7 +40,8 @@ struct Damage {
 struct PenSample {
     double x = 0, y = 0;    // screen pixels
     double pressure = 0.5;  // 0..1; 0.5 gives the preset width (use it when the pen has no pressure)
-    bool eraser = false;    // eraser end of the pen (or side button held)
+    bool eraser = false;    // eraser end of the pen
+    bool button = false;    // side button held: highlights whatever the tool, like the native notebook
 };
 
 enum class ToolKind { Pen, Highlighter, Eraser, Lasso };
@@ -199,6 +200,7 @@ private:
     PageTransform xf_;
 
     ToolKind tool_ = ToolKind::Pen;
+    ToolKind inkTool_ = ToolKind::Pen;  // what the stroke being written is drawn with
     std::array<ToolSize, 3> sizes_;  // indexed by ToolKind
     bool eraseWhole_ = false;  // eraser removes whole strokes instead of cutting them
     bool shapes_ = false;      // pen strokes are recognized as shapes
