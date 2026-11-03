@@ -4,6 +4,7 @@
 // (pages -> layers -> elements) closely enough that anything we can't edit yet
 // survives a load/save round trip untouched.
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -54,6 +55,14 @@ struct ForeignElement {
     double textWrap = 0;  // wrap width in points, 0 = no wrapping
     double textX = 0, textY = 0;
     uint32_t color = 0x000000;
+    // A Scrible math answer: a <text> that also says which function made it, from
+    // which numbers (scrible-math="sum" scrible-numbers="12;7.5;-30"). Xournal++ shows
+    // the text and ignores the rest.
+    std::string mathOp;                    // "sum", "average", "min", "max", "count"; empty otherwise
+    std::vector<std::string> mathNumbers;  // as read, and corrected
+    // Not saved: the shape of each number's characters as read (see DigitReader), so
+    // correcting one can teach the reader.
+    std::vector<std::vector<std::array<uint8_t, 16>>> mathShapes;
 };
 
 // Lines of a <text> element as drawn with the bitmap font: one glyph per code point,

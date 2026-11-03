@@ -149,6 +149,13 @@ ForeignElement parseForeign(const pugi::xml_node& n) {
         }
         f.text = n.child_value();
         f.textWrap = n.attribute("wrap").as_double(0);
+        f.mathOp = n.attribute("scrible-math").as_string();
+        const std::string numbers = n.attribute("scrible-numbers").as_string();
+        for (size_t start = 0; !f.mathOp.empty() && start <= numbers.size();) {
+            const size_t end = std::min(numbers.find(';', start), numbers.size());
+            if (end > start) f.mathNumbers.push_back(numbers.substr(start, end - start));
+            start = end + 1;
+        }
         if (!parseColor(n.attribute("color").as_string("black"), f.color, kStrokeColors)) f.color = 0;
         // The box the bitmap-font rendering occupies (not the real font's metrics).
         const std::vector<std::string> lines = textLines(f);
@@ -161,6 +168,7 @@ ForeignElement parseForeign(const pugi::xml_node& n) {
 }
 
 // ---- writing ----
+
 
 void appendEscaped(std::string& out, const std::string& s) {
     for (char c : s) {
@@ -224,6 +232,30 @@ void appendStroke(std::string& out, const Stroke& s) {
 }
 
 }  // namespace
+
+ForeignElement answerElement(const std::string& op, const std::vector<std::string>& numbers, const std::string& text,
+                             double x, double y, double size) {
+    std::string xml = "<text font=\"Sans\" size=\"";
+    appendNumber(xml, size, 2);
+    xml += "\" x=\"";
+    appendNumber(xml, x, 2);
+    xml += "\" y=\"";
+    appendNumber(xml, y, 2);
+    xml += "\" color=\"#000000ff\" scrible-math=\"";
+    appendEscaped(xml, op);
+    xml += "\" scrible-numbers=\"";
+    for (size_t i = 0; i < numbers.size(); ++i) {
+        if (i) xml += ';';
+        appendEscaped(xml, numbers[i]);
+    }
+    xml += "\">";
+    appendEscaped(xml, text);
+    xml += "</text>";
+    // Read back as any text is, so it's drawn and placed exactly as after loading.
+    pugi::xml_document d;
+    d.load_string(xml.c_str());
+    return parseForeign(d.first_child());
+}
 
 bool parseXopp(const std::string& xml, Document& doc, std::string& error, std::vector<std::string>* warnings) {
     pugi::xml_document x;

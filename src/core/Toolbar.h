@@ -11,9 +11,11 @@ namespace scrible {
 enum class Action {
     None,
     // editor: the tools panel (Tools opens it; sizes apply to the current tool), and
-    // Delete/Duplicate/Cancel act on a lasso selection
+    // the selection's menu: EditMenu (Delete, Duplicate) and MathMenu (the Math ones,
+    // on the numbers written in it); Cancel lets go of it
     Tools, Pen, Shapes, Lasso, Highlighter, Eraser, Pan, ZoomOut, ZoomIn, ZoomFit,
     SizeFine, SizeMedium, SizeThick, ErasePartial, EraseWhole,
+    EditMenu, MathMenu, MathSum, MathAverage, MathMin, MathMax, MathCount,
     Undo, Redo, Save,
     // editor: the page menu (PageStyle opens it): the current page's paper, or deleting it
     PageStyle, PaperBlank, PaperRuled, PaperGrid, PaperNarrow, PaperMedium, PaperWide, PaperMargin, DeletePage,

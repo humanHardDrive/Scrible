@@ -7,12 +7,15 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "Canvas.h"
+#include "DigitReader.h"
 #include "Document.h"
+#include "MathPopup.h"
 #include "PaperMenu.h"
 #include "Renderer.h"
 #include "ToolPanel.h"
@@ -58,6 +61,7 @@ struct EditorOptions {
     int toolbarHeight = 120;
     double dpi = 300;  // sizes new notebooks so a page fills the screen
     std::string pageStyle = "lined";
+    std::string digitExamplesPath;  // where corrections to read digits are kept (none: not kept)
     uint64_t settleDelayMs = 600;  // pen rest time before the grayscale cleanup refresh
     uint64_t autosaveDelayMs = 30000;
 };
@@ -71,6 +75,11 @@ public:
     const Toolbar& toolbar() const { return toolbar_; }
     const ToolPanel& toolPanel() const { return panel_; }
     const PaperMenu& paperMenu() const { return paperMenu_; }
+    const MathPopup& mathPopup() const { return math_; }
+    // Math answers on this page (element indices in the top layer), and each one's i,
+    // which shows the numbers it was worked out from.
+    std::vector<size_t> answers() const;
+    IRect answerInfoButton(size_t i) const;
     const std::string& path() const { return path_; }
     size_t pageIndex() const { return page_; }
     ToolKind tool() const { return tool_; }
@@ -142,7 +151,7 @@ private:
         std::optional<Page> pageData;    // AddPage: filled while undone; DeletePage: while done
         Background background{};         // Background: the page's other one (swapped in and out)
     };
-    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag, Pan };
+    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag, Pan, MoveAnswer };
     enum class DragKind { Move, Resize };
     struct OverlayButton {
         Action action;
@@ -205,6 +214,19 @@ private:
     void changePaper(Action a, uint64_t now);
     void closePaperMenu();
     void deletePage(uint64_t now);
+    enum class SelectionMenu { None, Edit, Math };
+    void showSelectionMenu(SelectionMenu m);
+    void openMath(Action op, uint64_t now);
+    const ForeignElement& answerAt(size_t i) const;
+    IRect answerRect(size_t i) const;
+    IRect answerArea(size_t i) const;  // with its i
+    void drawAnswerButtons(const IRect& clip);
+    void openAnswer(size_t i);
+    void mathTap(int x, int y, uint64_t now);
+    void closeMath();
+    void replaceAnswer(size_t i, ForeignElement a, uint64_t now);
+    void deleteAnswer(uint64_t now);
+    void dragAnswerTo(const StrokePoint& p);
     void finishExit(uint64_t now);
     void updateToolbar();
     void markModified(uint64_t now);
@@ -218,6 +240,11 @@ private:
     IRect pageArea_;
     ToolPanel panel_;
     PaperMenu paperMenu_;
+    MathPopup math_;
+    int answer_ = -1;                      // the answer whose numbers the popup shows (an element index)
+    std::unique_ptr<DigitReader> digits_;  // loaded the first time it's needed
+    ForeignElement answerBefore_;          // an answer being dragged, as it was
+    size_t dragAnswer_ = 0;
     Background paperBefore_;       // the page's paper when the menu opened
     bool deleteArmed_ = false;     // DELETE PAGE tapped once
     bool closePanelOnUp_ = false;  // the pen came down beside the open panel or paper menu
@@ -274,6 +301,7 @@ private:
     };
     Selection sel_;
     std::vector<OverlayButton> overlayButtons_;
+    SelectionMenu selectionMenu_ = SelectionMenu::None;  // which of EDIT and MATH is open
     std::vector<StrokePoint> lasso_;  // the loop being drawn (page coordinates)
     IRect lassoArea_;
     double lassoDots_ = 0;  // distance since the last dot of the dotted outline

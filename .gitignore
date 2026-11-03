@@ -4,3 +4,4 @@
 *.xopp.tmp
 .DS_Store
 /*.log
+/*.xopp

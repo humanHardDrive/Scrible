@@ -8,11 +8,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
 #include "About.h"
 #include "App.h"
+#include "DigitReader.h"
 #include "Editor.h"
 #include "EinkPanel.h"
 #include "Eraser.h"
@@ -142,6 +144,11 @@ void drawLine(Editor& e, double x0, double x1, double y, uint64_t& t, bool erase
 }
 
 IRect center(const IRect& r) { return {(r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2, 0, 0}; }
+
+// Page coordinates to the editor's screen (it fits the page to the area under the toolbar).
+IRect xf(Editor& e, const RectF& r) {
+    return fitPage(e.document().pages[0], {0, e.toolbar().rect().y1, e.canvas().width(), e.canvas().height()}).toScreen(r);
+}
 
 }  // namespace
 
@@ -1522,7 +1529,9 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
     e.perform(Action::Lasso, t += 10);
     path(handDrawn({{250, 520}, {850, 520}, {850, 720}, {250, 720}, {250, 530}}, 8, 1, 34));
     CHECK(e.selection() == (std::vector<size_t>{0, 1}));
-    CHECK(!e.selectionFrame().empty() && !e.selectionButton(Action::Delete).empty());
+    // Its menu: EDIT and MATH, whose options show once one is opened.
+    CHECK(!e.selectionFrame().empty() && !e.selectionButton(Action::EditMenu).empty());
+    CHECK(!e.selectionButton(Action::MathMenu).empty() && e.selectionButton(Action::Delete).empty());
 
     // Drag inside the frame: moves them.
     const IRect frame = center(e.selectionFrame());
@@ -1549,7 +1558,9 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
     CHECK(std::get<Stroke>(els[0]).width > 1.7 * widthBefore);
     CHECK(std::get<Stroke>(els[0]).bounds().x1 - std::get<Stroke>(els[0]).bounds().x0 > 1.7 * (before.x1 - before.x0));
 
-    // Duplicate (with a finger), then delete the copies, then undo that.
+    // EDIT: duplicate (with a finger), then delete the copies, then undo that.
+    tap(e.selectionButton(Action::EditMenu));
+    CHECK(!e.selectionButton(Action::Delete).empty() && e.selectionButton(Action::MathMenu).empty());
     tap(e.selectionButton(Action::Duplicate));
     CHECK(els.size() == 5 && e.selection() == (std::vector<size_t>{3, 4}));
     tap(e.selectionButton(Action::Delete));
@@ -1558,13 +1569,21 @@ TEST(editor_lasso_select_move_resize_delete_duplicate) {
     flush();
     CHECK(els.size() == 5);
 
-    // DONE, or a tap elsewhere, lets go of the selection.
+    // Tapping EDIT again closes its options; a new selection starts closed too.
     path(handDrawn({{250, 1400}, {950, 1400}, {950, 1600}, {250, 1600}, {250, 1410}}, 8, 1, 36));
-    CHECK(e.selection() == (std::vector<size_t>{2}));
-    tap(e.selectionButton(Action::Cancel));
-    CHECK(e.selection().empty());
-    path(handDrawn({{250, 1400}, {950, 1400}, {950, 1600}, {250, 1600}, {250, 1410}}, 8, 1, 37));
-    CHECK(!e.selection().empty());
+    CHECK(e.selection() == (std::vector<size_t>{2}) && e.selectionButton(Action::Delete).empty());
+    tap(e.selectionButton(Action::EditMenu));  // in: EDIT leads the row, then its options
+    CHECK(!e.selectionButton(Action::Delete).empty() && e.selectionButton(Action::MathMenu).empty());
+    CHECK(e.selectionButton(Action::EditMenu).x1 <= e.selectionButton(Action::Delete).x0);
+    CHECK(e.selectionButton(Action::EditMenu).y0 == e.selectionButton(Action::Delete).y0);
+    tap(e.selectionButton(Action::EditMenu));  // and back out
+    CHECK(e.selectionButton(Action::Delete).empty() && !e.selectionButton(Action::MathMenu).empty());
+    tap(e.selectionButton(Action::MathMenu));
+    CHECK(!e.selectionButton(Action::MathSum).empty() && e.selectionButton(Action::EditMenu).empty());
+    tap(e.selectionButton(Action::MathMenu));
+    CHECK(e.selectionButton(Action::MathSum).empty());
+
+    // A tap elsewhere lets go of the selection.
     e.penDown({1500, 2200, 0.5, false}, t += 10);
     e.penUp(t += 10);
     flush();
@@ -1695,8 +1714,8 @@ TEST(tool_panel_opens_picks_and_puts_itself_away) {
     tap(Action::Lasso);
     path({{260, 280}, {640, 280}, {640, 360}, {260, 360}, {262, 285}});
     CHECK(e.selection().size() == 1);
-    const IRect del = e.selectionButton(Action::Delete);
-    CHECK(!del.empty() && (del.x0 >= tab.x1 || del.y0 >= tab.y1 || del.y1 <= tab.y0));
+    const IRect menu = e.selectionButton(Action::EditMenu);
+    CHECK(!menu.empty() && (menu.x0 >= tab.x1 || menu.y0 >= tab.y1 || menu.y1 <= tab.y0));
 
     // Through all of it, the fast refreshes left nothing stale on the panel.
     e.onIdle(t += 1000);
@@ -2350,6 +2369,360 @@ TEST(library_about_dialog_opens_and_closes) {
         CHECK(lib.dialogRect().empty() && !app.quitRequested());
         removeDir(dir);
     }
+}
+
+// ---- reading handwritten numbers ----
+
+namespace {
+
+using Path = std::vector<StrokePoint>;
+
+// Digits drawn the way people often write them, in a unit box (y down).
+const std::vector<std::vector<Path>>& digitShapes() {
+    static const std::vector<std::vector<Path>> shapes = {
+        {{{0.5, 0}, {0.15, 0.2}, {0.1, 0.5}, {0.2, 0.85}, {0.5, 1}, {0.8, 0.85}, {0.9, 0.5}, {0.8, 0.15}, {0.5, 0}}},
+        {{{0.5, 0}, {0.5, 1}}},
+        {{{0.15, 0.25}, {0.35, 0.02}, {0.7, 0.02}, {0.85, 0.25}, {0.6, 0.55}, {0.1, 1}, {0.9, 1}}},
+        {{{0.15, 0.1}, {0.5, 0}, {0.85, 0.15}, {0.75, 0.4}, {0.4, 0.5}, {0.8, 0.6}, {0.85, 0.85}, {0.5, 1}, {0.15, 0.9}}},
+        {{{0.6, 0}, {0.05, 0.65}, {0.95, 0.65}}, {{0.7, 0.3}, {0.7, 1}}},
+        {{{0.25, 0}, {0.2, 0.45}, {0.6, 0.4}, {0.85, 0.6}, {0.8, 0.9}, {0.5, 1}, {0.15, 0.9}}, {{0.25, 0}, {0.85, 0}}},
+        {{{0.8, 0}, {0.4, 0.2}, {0.15, 0.6}, {0.25, 0.95}, {0.55, 1}, {0.8, 0.8}, {0.65, 0.55}, {0.3, 0.6}, {0.18, 0.7}}},
+        {{{0.1, 0}, {0.9, 0}, {0.4, 1}}},
+        {{{0.8, 0.12}, {0.5, 0}, {0.2, 0.15}, {0.3, 0.4}, {0.75, 0.6}, {0.8, 0.88}, {0.5, 1}, {0.2, 0.88}, {0.25, 0.6},
+          {0.7, 0.4}, {0.8, 0.15}}},
+        {{{0.8, 0.2}, {0.5, 0}, {0.2, 0.15}, {0.25, 0.4}, {0.55, 0.45}, {0.8, 0.25}, {0.8, 1}}},
+    };
+    return shapes;
+}
+
+// The paths of `text` ("0".."9", ".", ",", "-", " ") written from (x, y), each
+// character w by h: as many points as a pen would give.
+std::vector<Path> writePaths(const std::string& text, double x, double y, double w, double h) {
+    std::vector<Path> out;
+    auto add = [&](const Path& unit, double cx) {
+        Path p;
+        for (size_t i = 0; i + 1 < unit.size(); ++i)
+            for (int k = 0; k < 10; ++k) {
+                const double t = k / 10.0;
+                p.push_back({cx + w * (unit[i].x + (unit[i + 1].x - unit[i].x) * t),
+                             y + h * (unit[i].y + (unit[i + 1].y - unit[i].y) * t)});
+            }
+        p.push_back({cx + w * unit.back().x, y + h * unit.back().y});
+        out.push_back(p);
+    };
+    for (char c : text) {
+        if (c >= '0' && c <= '9') {
+            for (const Path& unit : digitShapes()[static_cast<size_t>(c - '0')]) add(unit, x);
+            x += w * 1.4;
+        } else if (c == '.') {
+            add({{0.1, 0.95}, {0.14, 0.98}}, x);
+            x += w * 0.5;
+        } else if (c == ',') {
+            add({{0.15, 0.92}, {0.05, 1.18}}, x);
+            x += w * 0.5;
+        } else if (c == '-') {
+            add({{0, 0.5}, {0.7, 0.5}}, x);
+            x += w * 1.1;
+        } else if (c == 'C') {  // a long comma, hanging below the line
+            add({{0.12, 0.6}, {0.02, 1.25}}, x);
+            x += w * 0.5;
+        } else if (c == 'N') {  // a 9 as a loop and then its tail
+            add({{0.8, 0.2}, {0.5, 0}, {0.2, 0.15}, {0.25, 0.4}, {0.55, 0.45}, {0.8, 0.25}}, x);
+            add({{0.8, 0.35}, {0.78, 1}}, x);
+            x += w * 1.4;
+        } else if (c == 'S') {  // a 7 with its bar drawn first
+            add({{0.05, 0}, {0.9, 0}}, x);
+            add({{0.9, 0.02}, {0.4, 1}}, x);
+            x += w * 1.4;
+        } else if (c == 'o') {  // a small 0, sitting low
+            Path zero;
+            for (const StrokePoint& p : digitShapes()[0][0]) zero.push_back({0.1 + 0.8 * p.x, 0.35 + 0.65 * p.y});
+            add(zero, x);
+            x += w * 1.2;
+        } else {
+            x += w * 2;
+        }
+    }
+    return out;
+}
+
+std::vector<Stroke> asStrokes(const std::vector<Path>& paths) {
+    std::vector<Stroke> out;
+    for (const Path& p : paths) {
+        Stroke s;
+        s.width = 1.41;
+        s.points = p;
+        out.push_back(s);
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST(digit_reader_reads_other_peoples_handwriting) {
+    // Samples of 30 writers, tested on the 14 others: the published figure is ~97-98%.
+    const DigitReader r(false);
+    size_t ok = 0;
+    for (size_t i = 0; i < DigitReader::testCount(); ++i) {
+        int d;
+        const DigitFeatures f = DigitReader::testSample(i, d);
+        ok += r.classify(f) == d;
+    }
+    CHECK(ok * 100 >= DigitReader::testCount() * 97);
+}
+
+TEST(digit_reader_reads_strokes_and_learns) {
+    const DigitReader shared;
+    for (int d = 0; d < 10; ++d) {
+        const std::vector<Stroke> ss = asStrokes(writePaths(std::string(1, char('0' + d)), 100, 100, 12, 20));
+        std::vector<const Stroke*> ptrs;
+        for (const Stroke& s : ss) ptrs.push_back(&s);
+        CHECK(shared.classify(digitFeatures(ptrs)) == d);
+    }
+    // A writer's own examples win over everyone else's: teach it that a 7 is a 1.
+    DigitReader r;
+    const std::vector<Stroke> seven = asStrokes(writePaths("7", 100, 100, 12, 20));
+    const DigitFeatures f = digitFeatures({&seven[0]});
+    CHECK(r.classify(f) == 7);
+    for (int i = 0; i < 3; ++i) r.addExample(f, 1);
+    CHECK(r.classify(f) == 1);
+    // Kept in a file, and read back.
+    const std::string path = tempPath("digits.txt");
+    std::remove(path.c_str());
+    CHECK(r.appendExample(path, f, 1) && r.appendExample(path, f, 1));
+    DigitReader again;
+    CHECK(again.loadExamples(path) && again.exampleCount() == 2);
+    std::remove(path.c_str());
+}
+
+TEST(reads_a_written_list_of_numbers) {
+    std::vector<Path> paths;
+    const char* lines[] = {"12", "7.5", "-30", "1,250", "4  96"};
+    for (int i = 0; i < 5; ++i)
+        for (const Path& p : writePaths(lines[i], 50, 50 + 40.0 * i, 12, 20)) paths.push_back(p);
+    const std::vector<ReadNumber> nums = readNumbers(asStrokes(paths), DigitReader());
+    std::vector<std::string> texts;
+    for (const ReadNumber& n : nums) texts.push_back(n.text());
+    CHECK(texts == (std::vector<std::string>{"12", "7.5", "-30", "1,250", "4", "96"}));
+    double v = 0;
+    const double expected[] = {12, 7.5, -30, 1250, 4, 96};
+    for (size_t i = 0; i < nums.size() && i < 6; ++i) CHECK(nums[i].parse(v) && v == expected[i]);
+}
+
+TEST(reads_commas_tails_and_bars_as_people_write_them) {
+    // Habits from a real handwriting test page: long commas that hang below the line,
+    // a 9 written as a loop and then a tail, a 7 with its bar drawn first, small 0s.
+    std::vector<Path> paths;
+    const char* lines[] = {"1C2N9", "S5", "1CoooCoo1", "NNNCNNNC999.9"};
+    for (int i = 0; i < 4; ++i)
+        for (const Path& p : writePaths(lines[i], 50, 50 + 40.0 * i, 12, 20)) paths.push_back(p);
+    std::vector<std::string> texts;
+    for (const ReadNumber& n : readNumbers(asStrokes(paths), DigitReader())) texts.push_back(n.text());
+    CHECK(texts == (std::vector<std::string>{"1,299", "75", "1,000,001", "999,999,999.9"}));
+}
+
+TEST(reads_lines_that_run_uphill_or_downhill) {
+    // On blank paper nothing keeps the writing level: tilt it both ways.
+    const char* lines[] = {"12", "7.5", "-30", "1C2N9", "1CoooCoo1", "4  96"};
+    const std::vector<std::string> expected = {"12", "7.5", "-30", "1,299", "1,000,001", "4", "96"};
+    for (double degrees : {-6.0, 6.0}) {
+        const double a = degrees * 3.14159265 / 180, c = std::cos(a), sn = std::sin(a);
+        std::vector<Path> paths;
+        for (int i = 0; i < 6; ++i)
+            for (Path p : writePaths(lines[i], 50, 50 + 40.0 * i, 12, 20)) {
+                for (StrokePoint& q : p) q = {100 + (q.x - 100) * c - (q.y - 150) * sn, 150 + (q.x - 100) * sn + (q.y - 150) * c};
+                paths.push_back(p);
+            }
+        std::vector<std::string> texts;
+        for (const ReadNumber& r : readNumbers(asStrokes(paths), DigitReader())) texts.push_back(r.text());
+        CHECK(texts == expected);
+    }
+}
+
+TEST(numbers_follow_the_writing_rules) {
+    auto parses = [](const std::string& t, double& v) {
+        ReadNumber n;
+        for (char c : t) n.chars.push_back({c, {}, {}, {}});
+        return n.parse(v);
+    };
+    double v = 0;
+    CHECK(parses("1,250,000.5", v) && v == 1250000.5);
+    CHECK(parses("-0.25", v) && v == -0.25);
+    CHECK(parses("42", v) && v == 42);
+    for (const char* bad : {"1,25", "1250,000", ",5", "1.", ".", "-", "1.2.3", "4?", "1,2345"}) CHECK(!parses(bad, v));
+}
+
+TEST(selection_math_reads_and_can_be_corrected) {
+    const std::string dir = tempDir("math");
+    EditorOptions o;
+    o.render.antialias = false;
+    o.digitExamplesPath = dir + "/.scrible-digits";
+    Editor e(1860, 2480, Document{}, dir + "/math.xopp", o);
+    EinkPanel panel(1860, 2480);
+    auto flush = [&] {
+        for (const Damage& d : e.takeDamage()) panel.refresh(e.canvas(), d);
+    };
+    uint64_t t = 1000;
+    auto pen = [&](const Path& p) {
+        e.penDown({p[0].x, p[0].y, 0.5, false}, t += 10);
+        for (size_t i = 1; i < p.size(); ++i) e.penMove({p[i].x, p[i].y, 0.5, false}, t += 5);
+        e.penUp(t += 5);
+        flush();
+    };
+    auto tap = [&](const IRect& r) {
+        CHECK(!r.empty());
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+    };
+    // A list, written at about the Scribe's handwriting size.
+    const char* lines[] = {"12", "7.5", "-30"};
+    for (int i = 0; i < 3; ++i)
+        for (const Path& p : writePaths(lines[i], 700, 900 + 160.0 * i, 60, 100)) pen(p);
+    e.onIdle(t += 1000);
+    flush();
+
+    // Select it; SUM is under MATH in the selection's menu, with the other math.
+    e.perform(Action::Lasso, t += 10);
+    pen({{600, 850}, {1200, 850}, {1200, 1360}, {600, 1360}, {600, 860}});
+    CHECK(e.selection().size() == 9);  // a 5 takes two strokes
+    tap(e.selectionButton(Action::MathMenu));
+    for (Action a : {Action::MathSum, Action::MathAverage, Action::MathMin, Action::MathMax, Action::MathCount})
+        CHECK(!e.selectionButton(a).empty());
+    // SUM puts the answer on the page, below the list, as text.
+    const auto& els = e.document().pages[0].layers.back().elements;
+    tap(e.selectionButton(Action::MathSum));
+    CHECK(e.answers().size() == 1 && !e.mathPopup().open());
+    auto answer = [&](size_t k) { return std::get<ForeignElement>(els[e.answers()[k]]); };
+    CHECK(answer(0).text == "-10.5" && answer(0).mathOp == "sum");
+    CHECK(answer(0).mathNumbers == (std::vector<std::string>{"12", "7.5", "-30"}));
+    CHECK(answer(0).bounds.y0 > std::get<Stroke>(els[0]).bounds().y1);  // below the list
+
+    // Its i shows the numbers it was worked out from.
+    tap(e.answerInfoButton(e.answers()[0]));
+    const MathPopup& m = e.mathPopup();
+    CHECK(m.open() && m.numbers().size() == 3 && m.result() == "SUM OF 3 = -10.5");
+
+    // Tap the 2 of "12", make it a 7: the answer on the page follows, and the reader learns.
+    tap(m.cellRect(0, 1));
+    tap(m.keyRect('7'));
+    CHECK(m.numbers()[0].text() == "17" && m.result() == "SUM OF 3 = -5.5");
+    CHECK(answer(0).text == "-5.5" && answer(0).mathNumbers[0] == "17");
+    std::ifstream kept(o.digitExamplesPath);
+    std::string line;
+    CHECK(std::getline(kept, line) && line[0] == '7');
+    tap(m.doneRect());
+    CHECK(!m.open());
+
+    // Undo: the correction, then the answer itself.
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(answer(0).text == "-10.5");
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.answers().empty());
+    e.perform(Action::Redo, t += 10);
+    e.perform(Action::Redo, t += 10);
+    flush();
+    CHECK(e.answers().size() == 1 && answer(0).text == "-5.5");
+
+    // The pen drags it anywhere, with any tool; a tap on it changes nothing.
+    e.perform(Action::Pen, t += 10);
+    const double x0 = answer(0).textX, y0 = answer(0).textY;
+    const IRect r = center(xf(e, answer(0).bounds));
+    pen({{double(r.x0), double(r.y0)}, {r.x0 + 150.0, r.y0 + 80.0}, {r.x0 + 300.0, r.y0 + 160.0}});
+    const double scale = 1860 / e.document().pages[0].width;
+    CHECK_NEAR(answer(0).textX, x0 + 300 / scale, 1e-6);
+    CHECK_NEAR(answer(0).textY, y0 + 160 / scale, 1e-6);
+    CHECK(answer(0).text == "-5.5");
+    const size_t strokes = els.size();
+    const IRect moved = center(xf(e, answer(0).bounds));
+    pen({{double(moved.x0), double(moved.y0)}});
+    CHECK(els.size() == strokes && answer(0).textX == x0 + 300 / scale);  // no ink, not moved
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK_NEAR(answer(0).textX, x0, 1e-9);
+    e.perform(Action::Redo, t += 10);
+    flush();
+
+    // Another function makes another answer, read afresh (that 2 now reads as a 7);
+    // DELETE in its popup takes it away.
+    e.perform(Action::Lasso, t += 10);
+    pen({{600, 850}, {1200, 850}, {1200, 1360}, {600, 1360}, {600, 860}});
+    tap(e.selectionButton(Action::MathMenu));
+    tap(e.selectionButton(Action::MathMax));
+    CHECK(e.answers().size() == 2 && answer(1).text == "17");
+    tap(e.answerInfoButton(e.answers()[1]));
+    tap(m.deleteRect());
+    CHECK(!m.open() && e.answers().size() == 1);
+
+    // The eraser takes an answer away whole, as one undo step, even starting on it (where
+    // other tools drag it); so does the pen's eraser end.
+    e.perform(Action::MathMax, t += 10);  // still selected: another answer to erase
+    CHECK(e.answers().size() == 2);
+    const IRect gone = center(xf(e, answer(1).bounds));
+    e.perform(Action::Eraser, t += 10);
+    pen({{gone.x0 - 40.0, double(gone.y0)}, {gone.x0 + 40.0, double(gone.y0)}});
+    CHECK(e.answers().size() == 1);
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.answers().size() == 2);
+    e.perform(Action::Pen, t += 10);
+    e.penDown({gone.x0 - 40.0, double(gone.y0), 0.5, true}, t += 10);
+    e.penMove({gone.x0 + 40.0, double(gone.y0), 0.5, true}, t += 10);
+    e.penUp(t += 10);
+    flush();
+    CHECK(e.answers().size() == 1);
+
+    // It's all in the file: Xournal++ sees text; Scrible, the math behind it.
+    CHECK(e.save(t += 10));
+    Document saved;
+    std::string err;
+    CHECK(loadXopp(dir + "/math.xopp", saved, err));
+    size_t found = 0;
+    for (const Element& el : saved.pages[0].layers.back().elements)
+        if (const auto* f = std::get_if<ForeignElement>(&el); f && f->tag == "text") {
+            ++found;
+            CHECK(f->text == "-5.5" && f->mathOp == "sum" && f->mathNumbers.size() == 3 && f->mathNumbers[0] == "17");
+        }
+    CHECK(found == 1);
+
+    e.onIdle(t += 1000);
+    flush();
+    CHECK_NEAR(panelMismatches(panel, e.canvas()), 0, 0);
+    removeDir(dir);
+}
+
+TEST(math_works_while_zoomed_in) {
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, Document{}, tempPath("zoom-math.xopp"), o);
+    uint64_t t = 1000;
+    e.perform(Action::ZoomIn, t += 10);
+    e.perform(Action::ZoomIn, t += 10);  // 200%
+    auto pen = [&](const Path& p) {
+        e.penDown({p[0].x, p[0].y, 0.5, false}, t += 10);
+        for (size_t i = 1; i < p.size(); ++i) e.penMove({p[i].x, p[i].y, 0.5, false}, t += 5);
+        e.penUp(t += 5);
+    };
+    for (int i = 0; i < 2; ++i)
+        for (const Path& p : writePaths(i == 0 ? "12" : "30", 700, 900 + 260.0 * i, 100, 170)) pen(p);
+    e.perform(Action::Lasso, t += 10);
+    pen({{600, 820}, {1300, 820}, {1300, 1400}, {600, 1400}, {600, 830}});
+    CHECK(e.selection().size() == 4);
+    auto tap = [&](const IRect& r) {
+        CHECK(!r.empty());
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+    };
+    tap(e.selectionButton(Action::MathMenu));
+    tap(e.selectionButton(Action::MathSum));
+    CHECK(e.answers().size() == 1);
+    // The i is where the answer is on the zoomed screen.
+    const IRect info = e.answerInfoButton(e.answers()[0]);
+    CHECK(info.y0 > 1160 + 170 && info.y1 < 2480);  // below the second line, on screen
+    tap(info);
+    CHECK(e.mathPopup().open() && e.mathPopup().result() == "SUM OF 2 = 42");
 }
 
 int main() {
