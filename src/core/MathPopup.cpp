@@ -54,6 +54,45 @@ void centered(Canvas& c, const IRect& r, const std::string& s, int scale, uint8_
 
 MathPopup::MathPopup(const IRect& area) : area_(area) {}
 
+const char* MathPopup::opKey(Action op) {
+    switch (op) {
+        case Action::MathSum: return "sum";
+        case Action::MathAverage: return "average";
+        case Action::MathMin: return "min";
+        case Action::MathMax: return "max";
+        case Action::MathCount: return "count";
+        default: return "";
+    }
+}
+
+Action MathPopup::opFromKey(const std::string& key) {
+    for (Action a : {Action::MathSum, Action::MathAverage, Action::MathMin, Action::MathMax, Action::MathCount})
+        if (key == opKey(a)) return a;
+    return Action::None;
+}
+
+std::string MathPopup::answer(Action op, const std::vector<ReadNumber>& numbers) {
+    std::vector<double> v;
+    for (const ReadNumber& n : numbers) {
+        double x;
+        if (n.parse(x)) v.push_back(x);
+    }
+    if (op == Action::MathCount) return std::to_string(v.size());
+    if (v.empty()) return "";
+    double r = 0;
+    switch (op) {
+        case Action::MathSum:
+        case Action::MathAverage:
+            for (double x : v) r += x;
+            if (op == Action::MathAverage) r /= static_cast<double>(v.size());
+            break;
+        case Action::MathMin: r = *std::min_element(v.begin(), v.end()); break;
+        case Action::MathMax: r = *std::max_element(v.begin(), v.end()); break;
+        default: break;
+    }
+    return format(r);
+}
+
 void MathPopup::show(Action op, std::vector<ReadNumber> numbers) {
     open_ = true;
     op_ = op;
@@ -65,7 +104,7 @@ void MathPopup::show(Action op, std::vector<ReadNumber> numbers) {
 void MathPopup::close() {
     open_ = false;
     numbers_.clear();
-    rect_ = done_ = {};
+    rect_ = done_ = delete_ = {};
     keys_.clear();
 }
 
@@ -81,7 +120,9 @@ void MathPopup::layout() {
     const int x0 = area_.x0 + (area_.width() - w) / 2;
     const int y0 = area_.y0 + std::max(40, (area_.height() - h) / 2);
     rect_ = {x0, y0, x0 + w, y0 + h};
-    done_ = {x0 + kPad, rect_.y1 - kPad - kDoneH, rect_.x1 - kPad, rect_.y1 - kPad};
+    const int xm = (x0 + rect_.x1) / 2;
+    delete_ = {x0 + kPad, rect_.y1 - kPad - kDoneH, xm - 10, rect_.y1 - kPad};
+    done_ = {xm + 10, rect_.y1 - kPad - kDoneH, rect_.x1 - kPad, rect_.y1 - kPad};
 
     keys_.clear();
     if (pickedNumber_ < 0) return;
@@ -108,26 +149,15 @@ IRect MathPopup::keyRect(char c) const {
 }
 
 std::string MathPopup::result() const {
-    std::vector<double> v;
+    size_t count = 0;
     for (const ReadNumber& n : numbers_) {
         double x;
-        if (n.parse(x)) v.push_back(x);
+        count += n.parse(x);
     }
-    const std::string name = opName(op_);
-    if (op_ == Action::MathCount) return name + " = " + std::to_string(v.size());
-    if (v.empty()) return name + ": NO NUMBERS";
-    double r = 0;
-    switch (op_) {
-        case Action::MathSum:
-        case Action::MathAverage:
-            for (double x : v) r += x;
-            if (op_ == Action::MathAverage) r /= static_cast<double>(v.size());
-            break;
-        case Action::MathMin: r = *std::min_element(v.begin(), v.end()); break;
-        case Action::MathMax: r = *std::max_element(v.begin(), v.end()); break;
-        default: break;
-    }
-    return name + " OF " + std::to_string(v.size()) + " = " + format(r);
+    const std::string name = opName(op_), a = answer(op_, numbers_);
+    if (op_ == Action::MathCount) return name + " = " + a;
+    if (a.empty()) return name + ": NO NUMBERS";
+    return name + " OF " + std::to_string(count) + " = " + a;
 }
 
 MathPopup::Tap MathPopup::tap(int x, int y) {
@@ -136,11 +166,16 @@ MathPopup::Tap MathPopup::tap(int x, int y) {
         t.close = true;
         return t;
     }
+    if (delete_.contains(x, y)) {
+        t.remove = true;
+        return t;
+    }
     for (const Key& k : keys_) {
         if (!k.r.contains(x, y)) continue;
         ReadChar& c = numbers_[static_cast<size_t>(pickedNumber_)].chars[static_cast<size_t>(pickedChar_)];
         c.c = k.c;
-        if (k.c >= '0' && k.c <= '9' && !c.strokes.empty()) {
+        t.edited = true;
+        if (k.c >= '0' && k.c <= '9' && c.features != DigitFeatures{}) {  // its shape is known
             t.taught = true;
             t.features = c.features;
             t.digit = k.c - '0';
@@ -197,6 +232,8 @@ void MathPopup::draw(Canvas& c, const IRect& clip) const {
         frame(c, k.r, 2, false, clip);
         centered(c, k.r, std::string(1, k.c), kKeyScale, 0, clip);
     }
+    frame(c, delete_, 3, false, clip);
+    centered(c, delete_, "DELETE", 4, 0, clip);
     frame(c, done_, 3, false, clip);
     centered(c, done_, "DONE", 4, 0, clip);
 }

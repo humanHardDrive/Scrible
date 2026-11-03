@@ -132,12 +132,15 @@ rest on the page.
 - EDIT: DELETE and DUPLICATE.
 - MATH: SUM, AVERAGE, MIN, MAX and COUNT. Select a list of numbers you've written (one
   per line, or several on a line with a wide gap between; on any paper, blank too), and
-  Scrible reads them and shows the answer, above the numbers as it read them. It
-  knows digits, decimal points, minus signs and thousands commas. Tap a character that
-  was misread to correct it; corrected digits become examples of your handwriting
-  (kept in `notebooks/.scrible-digits`), so it reads you better as you go. Reading
-  happens on the Kindle, from the strokes, by comparison with handwriting samples from
-  44 people (UCI's "Pen-Based Recognition of Handwritten Digits", CC BY 4.0).
+  Scrible reads them and puts the answer on the page below them, as text. Drag it
+  anywhere with the pen (any tool but the eraser, which erases it). The little i beside it shows the numbers it was
+  worked out from, as they were read; tap a character that was misread to correct it,
+  and the answer follows. DELETE there removes the answer. It knows digits, decimal
+  points, minus signs and thousands commas. Corrected digits become examples of your
+  handwriting (kept in `notebooks/.scrible-digits`), so it reads you better as you go.
+  Reading happens on the Kindle, from the strokes, by comparison with handwriting
+  samples from 44 people (UCI's "Pen-Based Recognition of Handwritten Digits", CC BY
+  4.0). In desktop Xournal++ the answer is ordinary text.
 
 - SHAPE switches shape recognition on or off; its box is filled while it's on. With it
   on, strokes that look like a line, triangle, rectangle, circle and so on are replaced

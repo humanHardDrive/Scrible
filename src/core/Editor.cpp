@@ -35,6 +35,18 @@ ToolbarGroups editorToolbar(bool fromList) {
     return g;
 }
 
+// Whether a sweep of the eraser from a to b, r to either side, touches the box.
+bool sweepTouches(const RectF& box, const StrokePoint& a, const StrokePoint& b, double r) {
+    RectF g = box;
+    g.grow(r);
+    const int steps = std::max(1, static_cast<int>(std::ceil(std::hypot(b.x - a.x, b.y - a.y) / std::max(r, 0.5))));
+    for (int k = 0; k <= steps; ++k) {
+        const double x = a.x + (b.x - a.x) * k / steps, y = a.y + (b.y - a.y) * k / steps;
+        if (x >= g.x0 && x <= g.x1 && y >= g.y0 && y <= g.y1) return true;
+    }
+    return false;
+}
+
 constexpr uint32_t kPenColor = 0x000000;
 constexpr uint32_t kHighlighterColor = 0xffff00;  // e-ink shows gray; the desktop shows yellow
 
@@ -137,6 +149,7 @@ void Editor::repaint(const IRect& r, Refresh mode) {
 // What goes over the page: the selection's frame and buttons, the tools panel, the paper menu.
 void Editor::drawChrome(const IRect& clip) {
     if (sel_.active) drawOverlay(clip);
+    drawAnswerButtons(clip);
     panel_.draw(canvas_, panelState(), clip);
     paperMenu_.draw(canvas_, clip);
     math_.draw(canvas_, clip);
@@ -324,9 +337,26 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
     }
     if (math_.open()) {  // its buttons, or a tap elsewhere closes it (and draws nothing)
         gesture_ = Gesture::Toolbar;
-        if (math_.covers(x, y)) mathTap(x, y);
+        if (math_.covers(x, y)) mathTap(x, y, now);
         else closeMath();
         return;
+    }
+    // A math answer: its i shows what's behind it; anywhere else on it, the pen drags
+    // it (the eraser erases it).
+    const bool erasing = s.eraser || (tool_ == ToolKind::Eraser && !s.button);
+    for (size_t i : answers()) {
+        if (answerInfoButton(i).grown(8).contains(x, y)) {
+            gesture_ = Gesture::Toolbar;
+            return openAnswer(i);
+        }
+        if (!erasing && answerRect(i).contains(x, y)) {
+            gesture_ = Gesture::MoveAnswer;
+            dragAnswer_ = i;
+            answerBefore_ = answerAt(i);
+            dragStart_ = {xf_.toPageX(s.x), xf_.toPageY(s.y)};
+            dragDirty_ = {};
+            return;
+        }
     }
     // Writing beside the open panel or menu puts it away, once the pen lifts:
     // repainting what it covers needs the slow waveform, which mustn't delay the ink.
@@ -389,8 +419,9 @@ void Editor::penMove(const PenSample& s, uint64_t now) {
     }
     const StrokePoint p{xf_.toPageX(s.x), xf_.toPageY(s.y)};
     if (gesture_ == Gesture::Lasso) return lassoTo(p);
-    if (gesture_ == Gesture::Drag) {
-        dragTo(p);
+    if (gesture_ == Gesture::Drag || gesture_ == Gesture::MoveAnswer) {
+        if (gesture_ == Gesture::Drag) dragTo(p);
+        else dragAnswerTo(p);
         if (now >= lastDragFrame_ + kDragFrameMs) dragFrame(now);
         return;
     }
@@ -417,6 +448,14 @@ void Editor::penUp(uint64_t now) {
         finishLasso();
     } else if (gesture_ == Gesture::Drag) {
         finishDrag(now);
+    } else if (gesture_ == Gesture::MoveAnswer) {
+        dragFrame(now);
+        const ForeignElement& a = answerAt(dragAnswer_);
+        if (a.textX != answerBefore_.textX || a.textY != answerBefore_.textY) {
+            pushUndo({UndoAction::Kind::Edit, page_, currentLayer(),
+                      {{false, dragAnswer_, std::move(answerBefore_)}, {true, dragAnswer_, Stroke{}}}, std::nullopt});
+            markModified(now);
+        }
     } else if (gesture_ == Gesture::Erase && !pendingErase_.edits.empty()) {
         pushUndo(std::move(pendingErase_));
         markModified(now);
@@ -434,7 +473,9 @@ void Editor::touchDown(int x, int y, uint64_t now) {
     if (toolbar_.rect().contains(x, y)) return perform(toolbar_.hit(x, y), now);
     if (panel_.covers(x, y)) return perform(panel_.hit(x, y), now);
     if (paperMenu_.covers(x, y)) return perform(paperMenu_.hit(x, y), now);
-    if (math_.open()) return math_.covers(x, y) ? mathTap(x, y) : closeMath();
+    if (math_.open()) return math_.covers(x, y) ? mathTap(x, y, now) : closeMath();
+    for (size_t i : answers())
+        if (answerInfoButton(i).grown(8).contains(x, y)) return openAnswer(i);
     for (const OverlayButton& b : overlayButtons_)
         if (sel_.active && b.r.contains(x, y)) return perform(b.action, now);
     // Fingers don't draw, so a tap elsewhere just puts the tools or the menu away.
@@ -538,8 +579,20 @@ void Editor::eraseAt(const PenSample& s, uint64_t now) {
 
     auto& elements = currentPage().layers[pendingErase_.layer].elements;
     RectF changed;
+    IRect screen;  // also changing: the i of answers that go
     std::vector<Stroke> pieces;
     for (size_t i = 0; i < elements.size();) {
+        // A math answer goes as a whole as soon as the eraser touches it.
+        if (const auto* f = std::get_if<ForeignElement>(&elements[i]); f && !f->mathOp.empty()) {
+            if (pendingErase_.layer + 1 != currentPage().layers.size() || !sweepTouches(f->bounds, from, to, r)) {
+                ++i;
+                continue;
+            }
+            screen = screen.united(answerArea(i));
+            pendingErase_.edits.push_back({false, i, std::move(elements[i])});
+            elements.erase(elements.begin() + static_cast<std::ptrdiff_t>(i));
+            continue;
+        }
         const auto* st = std::get_if<Stroke>(&elements[i]);
         if (!st || !eraseFromStroke(*st, from, to, r, pieces)) {
             ++i;
@@ -566,7 +619,8 @@ void Editor::eraseAt(const PenSample& s, uint64_t now) {
             ++i;
         }
     }
-    if (changed.valid) previewArea(xf_.toScreen(changed), now);
+    if (changed.valid) screen = screen.united(xf_.toScreen(changed));
+    if (!screen.empty()) previewArea(screen, now);
 }
 
 void Editor::previewArea(const IRect& r, uint64_t now) {
@@ -722,8 +776,9 @@ void Editor::showSelectionMenu(SelectionMenu m) {
     damage_.push_back({after, Refresh::UI});
 }
 
-// Reads the numbers written in the selection and shows the answer, with what was read.
-void Editor::openMath(Action op) {
+// Reads the numbers written in the selection, and puts the answer on the page just
+// below it, about as tall as the writing. Its i shows what it was worked out from.
+void Editor::openMath(Action op, uint64_t now) {
     if (!sel_.active) return;
     std::vector<Stroke> strokes;  // in the order they were written
     const auto& els = currentPage().layers[sel_.layer].elements;
@@ -736,24 +791,129 @@ void Editor::openMath(Action op) {
         digits_ = std::make_unique<DigitReader>();
         if (!opts_.digitExamplesPath.empty()) digits_->loadExamples(opts_.digitExamplesPath);
     }
-    std::vector<ReadNumber> numbers = readNumbers(strokes, *digits_);
+    const std::vector<ReadNumber> numbers = readNumbers(strokes, *digits_);
     size_t chars = 0;
     for (const ReadNumber& n : numbers) chars += n.chars.size();
     std::fprintf(stderr, "scrible: read %zu numbers (%zu characters, %zu of your own examples) in %.0f ms\n",
                  numbers.size(), chars, digits_->exampleCount(),
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
-    math_.show(op, std::move(numbers));
+    const std::string text = MathPopup::answer(op, numbers);
+    if (text.empty()) return setStatus("NO NUMBERS", now);
+
+    std::vector<std::string> texts;
+    std::vector<std::vector<std::array<uint8_t, 16>>> shapes;
+    std::vector<double> heights;
+    for (const ReadNumber& n : numbers) {
+        texts.push_back(n.text());
+        shapes.emplace_back();
+        for (const ReadChar& c : n.chars) {
+            shapes.back().push_back(c.features);
+            if (c.c >= '0' && c.c <= '9') heights.push_back(c.bounds.y1 - c.bounds.y0);
+        }
+    }
+    std::sort(heights.begin(), heights.end());
+    // A little smaller than the writing: the bitmap font is heavy.
+    const double size = std::clamp(heights.empty() ? 10.0 : 0.8 * heights[heights.size() / 2], 6.0, 60.0);
+    const Page& page = currentPage();
+    ForeignElement answer =
+        answerElement(MathPopup::opKey(op), texts, text, sel_.bounds.x0, sel_.bounds.y1 + 0.4 * size, size);
+    const double w = answer.bounds.x1 - answer.bounds.x0, h = answer.bounds.y1 - answer.bounds.y0;
+    const double x = std::clamp(answer.textX, 0.0, std::max(0.0, page.width - w));
+    const double y = std::clamp(answer.textY, 0.0, std::max(0.0, page.height - h));
+    answer = answerElement(MathPopup::opKey(op), texts, text, x, y, size);
+    answer.mathShapes = std::move(shapes);
+
+    const size_t layer = currentLayer();
+    auto& elements = currentPage().layers[layer].elements;
+    elements.emplace_back(std::move(answer));
+    pushUndo({UndoAction::Kind::Edit, page_, layer, {{true, elements.size() - 1, Stroke{}}}, std::nullopt});
+    markModified(now);
+    repaint(answerArea(elements.size() - 1), Refresh::Content);
+}
+
+std::vector<size_t> Editor::answers() const {
+    std::vector<size_t> out;
+    const Page& p = doc_.pages[page_];
+    if (p.layers.empty()) return out;
+    const auto& els = p.layers.back().elements;
+    for (size_t i = 0; i < els.size(); ++i)
+        if (const auto* f = std::get_if<ForeignElement>(&els[i]); f && !f->mathOp.empty()) out.push_back(i);
+    return out;
+}
+
+const ForeignElement& Editor::answerAt(size_t i) const {
+    return std::get<ForeignElement>(doc_.pages[page_].layers.back().elements[i]);
+}
+
+IRect Editor::answerRect(size_t i) const { return xf_.toScreen(answerAt(i).bounds); }
+
+// A small box with an i, at the answer's top right.
+IRect Editor::answerInfoButton(size_t i) const {
+    const IRect r = answerRect(i);
+    return {r.x1 + 8, r.y0, r.x1 + 8 + 44, r.y0 + 44};
+}
+
+IRect Editor::answerArea(size_t i) const { return answerRect(i).united(answerInfoButton(i)).grown(2); }
+
+void Editor::drawAnswerButtons(const IRect& clip) {
+    for (size_t i : answers()) {
+        const IRect b = answerInfoButton(i);
+        if (b.intersected(clip).empty()) continue;
+        canvas_.fill(b.intersected(clip), 0);
+        canvas_.fill(b.grown(-3).intersected(clip), 255);
+        canvas_.drawText(b.x0 + (b.width() - 24) / 2, b.y0 + (b.height() - 24) / 2, "i", 3, 0, b.intersected(clip));
+    }
+}
+
+// The popup with the numbers behind an answer, ready for corrections.
+void Editor::openAnswer(size_t i) {
+    closeMath();
+    const ForeignElement& a = answerAt(i);
+    std::vector<ReadNumber> numbers;
+    for (size_t k = 0; k < a.mathNumbers.size(); ++k) {
+        ReadNumber n;
+        for (size_t j = 0; j < a.mathNumbers[k].size(); ++j) {
+            ReadChar c;
+            c.c = a.mathNumbers[k][j];
+            if (k < a.mathShapes.size() && j < a.mathShapes[k].size()) c.features = a.mathShapes[k][j];
+            n.chars.push_back(c);
+        }
+        numbers.push_back(std::move(n));
+    }
+    answer_ = static_cast<int>(i);
+    math_.show(MathPopup::opFromKey(a.mathOp), std::move(numbers));
     math_.draw(canvas_, pageArea_);
     damage_.push_back({math_.rect(), Refresh::UI});
 }
 
-void Editor::mathTap(int x, int y) {
+void Editor::mathTap(int x, int y, uint64_t now) {
     const MathPopup::Tap t = math_.tap(x, y);
     if (t.close) return closeMath();
-    if (t.taught && digits_) {
+    if (t.remove) return deleteAnswer(now);
+    if (t.taught) {
         // The correction is an example of the user's handwriting from now on.
+        if (!digits_) {
+            digits_ = std::make_unique<DigitReader>();
+            if (!opts_.digitExamplesPath.empty()) digits_->loadExamples(opts_.digitExamplesPath);
+        }
         digits_->addExample(t.features, t.digit);
         if (!opts_.digitExamplesPath.empty()) digits_->appendExample(opts_.digitExamplesPath, t.features, t.digit);
+    }
+    if (t.edited && answer_ >= 0) {
+        // The answer on the page follows the corrected numbers.
+        const ForeignElement& a = answerAt(static_cast<size_t>(answer_));
+        std::vector<std::string> texts;
+        std::vector<std::vector<std::array<uint8_t, 16>>> shapes;
+        for (const ReadNumber& n : math_.numbers()) {
+            texts.push_back(n.text());
+            shapes.emplace_back();
+            for (const ReadChar& c : n.chars) shapes.back().push_back(c.features);
+        }
+        std::string text = MathPopup::answer(MathPopup::opFromKey(a.mathOp), math_.numbers());
+        if (text.empty()) text = "?";
+        ForeignElement updated = answerElement(a.mathOp, texts, text, a.textX, a.textY, a.textSize);
+        updated.mathShapes = std::move(shapes);
+        replaceAnswer(static_cast<size_t>(answer_), std::move(updated), now);
     }
     if (!t.changed) return;
     math_.draw(canvas_, math_.rect());
@@ -761,10 +921,47 @@ void Editor::mathTap(int x, int y) {
 }
 
 void Editor::closeMath() {
+    answer_ = -1;
     if (!math_.open()) return;
     const IRect area = math_.rect();
     math_.close();
     repaint(area, Refresh::Content);
+}
+
+// One undo step: the answer as it was, then as it is.
+void Editor::replaceAnswer(size_t i, ForeignElement a, uint64_t now) {
+    const IRect before = answerArea(i);
+    auto& els = currentPage().layers[currentLayer()].elements;
+    Element old = std::move(els[i]);
+    els[i] = std::move(a);
+    pushUndo({UndoAction::Kind::Edit, page_, currentLayer(), {{false, i, std::move(old)}, {true, i, Stroke{}}},
+              std::nullopt});
+    markModified(now);
+    repaint(before.united(answerArea(i)), Refresh::Content);
+}
+
+void Editor::deleteAnswer(uint64_t now) {
+    if (answer_ < 0) return closeMath();
+    const size_t i = static_cast<size_t>(answer_);
+    const IRect area = answerArea(i);
+    closeMath();
+    auto& els = currentPage().layers[currentLayer()].elements;
+    UndoAction u{UndoAction::Kind::Edit, page_, currentLayer(), {{false, i, std::move(els[i])}}, std::nullopt};
+    els.erase(els.begin() + static_cast<std::ptrdiff_t>(i));
+    pushUndo(std::move(u));
+    markModified(now);
+    repaint(area, Refresh::Content);
+}
+
+// Moves the answer being dragged with the pen; the screen catches up in dragFrame().
+void Editor::dragAnswerTo(const StrokePoint& p) {
+    const IRect before = answerArea(dragAnswer_);
+    const ForeignElement& a = answerBefore_;
+    ForeignElement moved = answerElement(a.mathOp, a.mathNumbers, a.text, a.textX + p.x - dragStart_.x,
+                                         a.textY + p.y - dragStart_.y, a.textSize);
+    moved.mathShapes = a.mathShapes;
+    currentPage().layers[currentLayer()].elements[dragAnswer_] = std::move(moved);
+    dragDirty_ = dragDirty_.united(before).united(answerArea(dragAnswer_));
 }
 
 IRect Editor::overlayArea() const {
@@ -924,7 +1121,7 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::MathMax:
         case Action::MathCount:
             closeMath();
-            return openMath(a);
+            return openMath(a, now);
         case Action::EditMenu:
         case Action::MathMenu:
             closeMath();
@@ -1084,6 +1281,7 @@ void Editor::setPage(size_t index) {
     sel_ = Selection{};
     overlayButtons_.clear();
     math_.close();
+    answer_ = -1;
     xf_ = fitPage(currentPage(), pageArea_);
     settle_ = {};
     settleAt_ = 0;
@@ -1238,7 +1436,9 @@ void Editor::onIdle(uint64_t now) {
         else return finishExit(now);
     }
     const bool busy = penBusy();
-    if (gesture_ == Gesture::Drag && !dragDirty_.empty() && now >= lastDragFrame_ + kDragFrameMs) dragFrame(now);
+    if ((gesture_ == Gesture::Drag || gesture_ == Gesture::MoveAnswer) && !dragDirty_.empty() &&
+        now >= lastDragFrame_ + kDragFrameMs)
+        dragFrame(now);
     if (settleAt_ && now >= settleAt_ && !busy) {
         // Repaint from the document (replacing the live-ink approximations) and refresh
         // with the grayscale waveform, so antialiasing and highlighters show properly.
@@ -1265,7 +1465,8 @@ int Editor::msUntilIdleWork(uint64_t now) const {
     auto consider = [&](uint64_t t) {
         if (t && (!next || t < next)) next = t;
     };
-    if (gesture_ == Gesture::Drag && !dragDirty_.empty()) consider(lastDragFrame_ + kDragFrameMs);
+    if ((gesture_ == Gesture::Drag || gesture_ == Gesture::MoveAnswer) && !dragDirty_.empty())
+        consider(lastDragFrame_ + kDragFrameMs);
     if (!busy) consider(settleAt_);
     consider(statusUntil_);
     if (modified_ && !busy && !settleAt_) consider(std::max<uint64_t>(modifiedSince_ + opts_.autosaveDelayMs, 1));

@@ -75,6 +75,10 @@ public:
     const ToolPanel& toolPanel() const { return panel_; }
     const PaperMenu& paperMenu() const { return paperMenu_; }
     const MathPopup& mathPopup() const { return math_; }
+    // Math answers on this page (element indices in the top layer), and each one's i,
+    // which shows the numbers it was worked out from.
+    std::vector<size_t> answers() const;
+    IRect answerInfoButton(size_t i) const;
     const std::string& path() const { return path_; }
     size_t pageIndex() const { return page_; }
     ToolKind tool() const { return tool_; }
@@ -130,7 +134,7 @@ private:
         std::optional<Page> pageData;    // AddPage: filled while undone; DeletePage: while done
         Background background{};         // Background: the page's other one (swapped in and out)
     };
-    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag };
+    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag, MoveAnswer };
     enum class DragKind { Move, Resize };
     struct OverlayButton {
         Action action;
@@ -187,9 +191,17 @@ private:
     void deletePage(uint64_t now);
     enum class SelectionMenu { None, Edit, Math };
     void showSelectionMenu(SelectionMenu m);
-    void openMath(Action op);
-    void mathTap(int x, int y);
+    void openMath(Action op, uint64_t now);
+    const ForeignElement& answerAt(size_t i) const;
+    IRect answerRect(size_t i) const;
+    IRect answerArea(size_t i) const;  // with its i
+    void drawAnswerButtons(const IRect& clip);
+    void openAnswer(size_t i);
+    void mathTap(int x, int y, uint64_t now);
     void closeMath();
+    void replaceAnswer(size_t i, ForeignElement a, uint64_t now);
+    void deleteAnswer(uint64_t now);
+    void dragAnswerTo(const StrokePoint& p);
     void finishExit(uint64_t now);
     void updateToolbar();
     void markModified(uint64_t now);
@@ -204,7 +216,10 @@ private:
     ToolPanel panel_;
     PaperMenu paperMenu_;
     MathPopup math_;
+    int answer_ = -1;                      // the answer whose numbers the popup shows (an element index)
     std::unique_ptr<DigitReader> digits_;  // loaded the first time it's needed
+    ForeignElement answerBefore_;          // an answer being dragged, as it was
+    size_t dragAnswer_ = 0;
     Background paperBefore_;       // the page's paper when the menu opened
     bool deleteArmed_ = false;     // DELETE PAGE tapped once
     bool closePanelOnUp_ = false;  // the pen came down beside the open panel or paper menu

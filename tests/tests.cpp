@@ -141,6 +141,11 @@ void drawLine(Editor& e, double x0, double x1, double y, uint64_t& t, bool erase
 
 IRect center(const IRect& r) { return {(r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2, 0, 0}; }
 
+// Page coordinates to the editor's screen (it fits the page to the area under the toolbar).
+IRect xf(Editor& e, const RectF& r) {
+    return fitPage(e.document().pages[0], {0, e.toolbar().rect().y1, e.canvas().width(), e.canvas().height()}).toScreen(r);
+}
+
 }  // namespace
 
 // ---- file format ----
@@ -2340,33 +2345,103 @@ TEST(selection_math_reads_and_can_be_corrected) {
     tap(e.selectionButton(Action::MathMenu));
     for (Action a : {Action::MathSum, Action::MathAverage, Action::MathMin, Action::MathMax, Action::MathCount})
         CHECK(!e.selectionButton(a).empty());
+    // SUM puts the answer on the page, below the list, as text.
+    const auto& els = e.document().pages[0].layers.back().elements;
     tap(e.selectionButton(Action::MathSum));
-    const MathPopup& m = e.mathPopup();
-    CHECK(m.open() && m.numbers().size() == 3);
-    CHECK(m.result() == "SUM OF 3 = -10.5");
+    CHECK(e.answers().size() == 1 && !e.mathPopup().open());
+    auto answer = [&](size_t k) { return std::get<ForeignElement>(els[e.answers()[k]]); };
+    CHECK(answer(0).text == "-10.5" && answer(0).mathOp == "sum");
+    CHECK(answer(0).mathNumbers == (std::vector<std::string>{"12", "7.5", "-30"}));
+    CHECK(answer(0).bounds.y0 > std::get<Stroke>(els[0]).bounds().y1);  // below the list
 
-    // Tap the 2 of "12", make it a 7: the answer follows, and the reader learns.
+    // Its i shows the numbers it was worked out from.
+    tap(e.answerInfoButton(e.answers()[0]));
+    const MathPopup& m = e.mathPopup();
+    CHECK(m.open() && m.numbers().size() == 3 && m.result() == "SUM OF 3 = -10.5");
+
+    // Tap the 2 of "12", make it a 7: the answer on the page follows, and the reader learns.
     tap(m.cellRect(0, 1));
     tap(m.keyRect('7'));
     CHECK(m.numbers()[0].text() == "17" && m.result() == "SUM OF 3 = -5.5");
+    CHECK(answer(0).text == "-5.5" && answer(0).mathNumbers[0] == "17");
     std::ifstream kept(o.digitExamplesPath);
     std::string line;
     CHECK(std::getline(kept, line) && line[0] == '7');
-
-    // DONE closes it; the selection stays. Other math works the same way.
     tap(m.doneRect());
-    CHECK(!m.open() && !e.selection().empty());
-    tap(e.selectionButton(Action::MathMax));
-    CHECK(m.result() == "MAX OF 3 = 17");  // read afresh: that 2 now reads as the 7 it was taught to be
-    e.touchDown(100, 2400, t += 10);  // a tap elsewhere closes it
-    flush();
     CHECK(!m.open());
 
-    // A restarted editor reads with the example it was taught.
-    Editor again(1860, 2480, Document{}, dir + "/other.xopp", o);
-    (void)again;
-    DigitReader reader;
-    CHECK(reader.loadExamples(o.digitExamplesPath) && reader.exampleCount() == 1);
+    // Undo: the correction, then the answer itself.
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(answer(0).text == "-10.5");
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.answers().empty());
+    e.perform(Action::Redo, t += 10);
+    e.perform(Action::Redo, t += 10);
+    flush();
+    CHECK(e.answers().size() == 1 && answer(0).text == "-5.5");
+
+    // The pen drags it anywhere, with any tool; a tap on it changes nothing.
+    e.perform(Action::Pen, t += 10);
+    const double x0 = answer(0).textX, y0 = answer(0).textY;
+    const IRect r = center(xf(e, answer(0).bounds));
+    pen({{double(r.x0), double(r.y0)}, {r.x0 + 150.0, r.y0 + 80.0}, {r.x0 + 300.0, r.y0 + 160.0}});
+    const double scale = 1860 / e.document().pages[0].width;
+    CHECK_NEAR(answer(0).textX, x0 + 300 / scale, 1e-6);
+    CHECK_NEAR(answer(0).textY, y0 + 160 / scale, 1e-6);
+    CHECK(answer(0).text == "-5.5");
+    const size_t strokes = els.size();
+    const IRect moved = center(xf(e, answer(0).bounds));
+    pen({{double(moved.x0), double(moved.y0)}});
+    CHECK(els.size() == strokes && answer(0).textX == x0 + 300 / scale);  // no ink, not moved
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK_NEAR(answer(0).textX, x0, 1e-9);
+    e.perform(Action::Redo, t += 10);
+    flush();
+
+    // Another function makes another answer, read afresh (that 2 now reads as a 7);
+    // DELETE in its popup takes it away.
+    e.perform(Action::Lasso, t += 10);
+    pen({{600, 850}, {1200, 850}, {1200, 1360}, {600, 1360}, {600, 860}});
+    tap(e.selectionButton(Action::MathMenu));
+    tap(e.selectionButton(Action::MathMax));
+    CHECK(e.answers().size() == 2 && answer(1).text == "17");
+    tap(e.answerInfoButton(e.answers()[1]));
+    tap(m.deleteRect());
+    CHECK(!m.open() && e.answers().size() == 1);
+
+    // The eraser takes an answer away whole, as one undo step, even starting on it (where
+    // other tools drag it); so does the pen's eraser end.
+    e.perform(Action::MathMax, t += 10);  // still selected: another answer to erase
+    CHECK(e.answers().size() == 2);
+    const IRect gone = center(xf(e, answer(1).bounds));
+    e.perform(Action::Eraser, t += 10);
+    pen({{gone.x0 - 40.0, double(gone.y0)}, {gone.x0 + 40.0, double(gone.y0)}});
+    CHECK(e.answers().size() == 1);
+    e.perform(Action::Undo, t += 10);
+    flush();
+    CHECK(e.answers().size() == 2);
+    e.perform(Action::Pen, t += 10);
+    e.penDown({gone.x0 - 40.0, double(gone.y0), 0.5, true}, t += 10);
+    e.penMove({gone.x0 + 40.0, double(gone.y0), 0.5, true}, t += 10);
+    e.penUp(t += 10);
+    flush();
+    CHECK(e.answers().size() == 1);
+
+    // It's all in the file: Xournal++ sees text; Scrible, the math behind it.
+    CHECK(e.save(t += 10));
+    Document saved;
+    std::string err;
+    CHECK(loadXopp(dir + "/math.xopp", saved, err));
+    size_t found = 0;
+    for (const Element& el : saved.pages[0].layers.back().elements)
+        if (const auto* f = std::get_if<ForeignElement>(&el); f && f->tag == "text") {
+            ++found;
+            CHECK(f->text == "-5.5" && f->mathOp == "sum" && f->mathNumbers.size() == 3 && f->mathNumbers[0] == "17");
+        }
+    CHECK(found == 1);
 
     e.onIdle(t += 1000);
     flush();

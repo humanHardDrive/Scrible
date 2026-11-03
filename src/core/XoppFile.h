@@ -25,4 +25,9 @@ bool parseXopp(const std::string& xml, Document& doc, std::string& error,
 bool saveXopp(const std::string& path, const Document& doc, std::string& error);
 std::string serializeXopp(const Document& doc);
 
+// A math answer as a text element: `text` at (x, y), `size` points tall, recording
+// the function and the numbers it was worked out from (see ForeignElement).
+ForeignElement answerElement(const std::string& op, const std::vector<std::string>& numbers, const std::string& text,
+                             double x, double y, double size);
+
 }  // namespace scrible
