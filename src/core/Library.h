@@ -73,11 +73,13 @@ public:
     IRect rowRect(size_t index) const;
     IRect menuRect(size_t index) const;
     // The open menu or confirmation dialog, and one of its buttons; empty if none is open.
-    IRect dialogRect() const { return mode_ == Mode::Menu || mode_ == Mode::ConfirmDelete ? dialog_ : IRect{}; }
+    IRect dialogRect() const { return dialogOpen() ? dialog_ : IRect{}; }
     IRect dialogButton(Action a) const;
 
     void rescan();
     void setMessage(std::string text) { message_ = std::move(text); }
+    // Lines about the platform for the About dialog (the device, its libraries).
+    void setPlatformInfo(std::vector<std::string> lines) { platformInfo_ = std::move(lines); }
     void redrawAll(Refresh mode = Refresh::Full);
 
     Intent tap(int x, int y);  // pen or finger
@@ -85,7 +87,7 @@ public:
     std::vector<Damage> takeDamage();
 
 private:
-    enum class Mode { List, Menu, ConfirmDelete, Prompt };
+    enum class Mode { List, Menu, ConfirmDelete, About, Prompt };
     enum class PromptFor { New, Rename, Duplicate };
     struct DialogButton {
         Action action;
@@ -93,6 +95,7 @@ private:
         IRect r;
     };
 
+    bool dialogOpen() const { return mode_ == Mode::Menu || mode_ == Mode::ConfirmDelete || mode_ == Mode::About; }
     size_t pageCount() const;
     void drawList();
     void drawRow(size_t index, bool highlighted, bool menuPressed = false);
@@ -111,6 +114,7 @@ private:
     NotebookOrder order_;
     std::vector<NotebookInfo> notebooks_;
     std::string scanError_, message_;
+    std::vector<std::string> platformInfo_;
     size_t page_ = 0;
     int listTop_;
     int rowHeight_ = 160;

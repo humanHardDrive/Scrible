@@ -112,6 +112,8 @@ In the list:
 - Files Xournal++ keeps next to a notebook are renamed, copied and deleted along with
   it (e.g. `Name.xopp.bg.pdf` for an annotated PDF).
 - `<` `>` page through a long list, and EXIT returns to the Kindle home screen.
+- ABOUT shows the version and exactly which build this is (the git commit it was built
+  from, or the release tag), the device, and the license.
 
 In a notebook the toolbar along the top has UNDO / REDO, PAGE, `<` page `>`, SAVE,
 BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the

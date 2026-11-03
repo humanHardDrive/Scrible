@@ -257,6 +257,7 @@ int main(int argc, char** argv) {
     aopts.editor.render.antialias = false;  // what DU shows while writing is then exactly the final stroke
     if (scrible::isNotebookFile(args.path)) aopts.file = args.path;
     else aopts.notebooksDir = args.path;
+    aopts.platformInfo = {display.aboutLine()};
     scrible::App app(display.width(), display.height(), aopts);
     if (!app.startupError().empty()) {
         std::fprintf(stderr, "scrible: %s\n", app.startupError().c_str());

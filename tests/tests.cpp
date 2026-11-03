@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "About.h"
 #include "App.h"
 #include "Editor.h"
 #include "EinkPanel.h"
@@ -2002,6 +2003,47 @@ TEST(pen_side_button_highlights_with_any_tool) {
     e.penMove({600, 700, 0.5, true, false}, t += 10);
     e.penUp(t += 10);
     CHECK(els.size() == 3);
+}
+
+// ---- about ----
+
+TEST(about_text_has_the_version_build_and_license) {
+    const BuildInfo b = buildInfo();
+    CHECK(!b.version.empty() && b.version != "dev");
+    const std::vector<std::string> t = aboutText({"Kindle Test (Codename), FBInk vX"}, "/mnt/us/scrible/notebooks");
+    auto has = [&](const std::string& needle) {
+        for (const std::string& line : t)
+            if (line.find(needle) != std::string::npos) return true;
+        return false;
+    };
+    CHECK(has("Kindle Test (Codename), FBInk vX") && has("Notebooks: /mnt/us/scrible/notebooks"));
+    CHECK(has("GNU GPL, version 3 or later") && has("Copyright (C) 2026 Sam Stratter"));
+    CHECK(has("Build ") == !b.commit.empty());
+}
+
+TEST(library_about_dialog_opens_and_closes) {
+    for (auto [w, h] : {std::pair{1860, 2480}, std::pair{1072, 1448}}) {  // the Scribe, and a narrow Kindle
+        const std::string dir = tempDir("about");
+        AppOptions o;
+        o.notebooksDir = dir;
+        o.platformInfo = {"Kindle Test (Codename), FBInk v1.25.0-543-g886f25f1"};
+        uint64_t t = 0;
+        App app(w, h, o);
+        Library& lib = *app.library();
+        app.takeDamage();
+        CHECK(!lib.toolbar().buttonRect(Action::About).empty());
+        tapButton(app, lib.toolbar(), Action::About, t);
+        const IRect d = lib.dialogRect();
+        CHECK(!d.empty() && d.y0 >= lib.toolbar().rect().y1 && d.y1 <= h && d.x1 <= w);  // fits, wrapped
+        CHECK(!lib.dialogButton(Action::Cancel).empty());
+        for (const Damage& dmg : app.takeDamage()) CHECK(dmg.mode == Refresh::UI);
+        tapAt(app, lib.dialogButton(Action::Cancel), t);
+        CHECK(lib.dialogRect().empty());
+        tapButton(app, lib.toolbar(), Action::About, t);
+        app.touchDown(5, h - 5, t += 10);  // outside it
+        CHECK(lib.dialogRect().empty() && !app.quitRequested());
+        removeDir(dir);
+    }
 }
 
 int main() {

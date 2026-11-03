@@ -935,6 +935,7 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::ErasePartial:
         case Action::EraseWhole:
         case Action::NewNotebook:  // the library's
+        case Action::About:
         case Action::Sort:
         case Action::Rename:
         case Action::Confirm: return;

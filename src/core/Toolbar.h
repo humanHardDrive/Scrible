@@ -23,7 +23,7 @@ enum class Action {
     // editor: save and leave the app directly
     Quit,
     // library
-    NewNotebook, Sort, Rename, Duplicate, Delete,
+    NewNotebook, Sort, Rename, Duplicate, Delete, About,
     // dialogs and the text prompt
     Confirm, Cancel,
 };

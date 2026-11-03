@@ -12,6 +12,8 @@
 #include <cstring>
 #include <fstream>
 
+#include "About.h"
+
 namespace scrible {
 namespace {
 
@@ -54,6 +56,26 @@ std::string ellipsize(const std::string& s, size_t maxChars) {
         out += c;
     }
     return out + "...";
+}
+
+// Breaks `text` into lines of at most `maxChars` code points, at spaces; a word too
+// long for a line is shortened. An empty text is one empty line.
+std::vector<std::string> wrap(const std::string& text, size_t maxChars) {
+    std::vector<std::string> lines(1);
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t end = text.find(' ', start);
+        if (end == std::string::npos) end = text.size();
+        const std::string word = ellipsize(text.substr(start, end - start), maxChars);
+        std::string& line = lines.back();
+        if (!word.empty()) {
+            if (line.empty()) line = word;
+            else if (codePoints(line) + 1 + codePoints(word) <= maxChars) line += " " + word;
+            else lines.push_back(word);
+        }
+        start = end + 1;
+    }
+    return lines;
 }
 
 std::string describe(const NotebookInfo& nb) {
@@ -272,7 +294,7 @@ Library::Library(int width, int height, std::string dir, Settings* settings, int
       toolbar_(width, toolbarHeight,
                {{{Action::NewNotebook, "NEW"}, {Action::Sort, "NEWEST"}},
                 {{Action::PrevPage, "<"}, {Action::None, "000/000"}, {Action::NextPage, ">"}},
-                {{Action::Exit, "EXIT"}}}),
+                {{Action::About, "ABOUT"}, {Action::Exit, "EXIT"}}}),
       prompt_(width, height, toolbarHeight),
       dir_(std::move(dir)),
       settings_(settings),
@@ -304,7 +326,7 @@ IRect Library::menuRect(size_t index) const {
 }
 
 IRect Library::dialogButton(Action a) const {
-    if (mode_ != Mode::Menu && mode_ != Mode::ConfirmDelete) return {};
+    if (!dialogOpen()) return {};
     for (const DialogButton& b : dialogButtons_)
         if (b.action == a) return b.r;
     return {};
@@ -337,6 +359,7 @@ void Library::drawList() {
     if (page_ == 0) s.disabled.push_back(Action::PrevPage);
     if (page_ + 1 >= pageCount()) s.disabled.push_back(Action::NextPage);
     s.labels = {{Action::Sort, order_ == NotebookOrder::Name ? "A-Z" : "NEWEST"}};
+    if (mode_ == Mode::About) s.active.push_back(Action::About);
     s.text = std::to_string(page_ + 1) + "/" + std::to_string(pageCount());
     toolbar_.draw(canvas_, s);
 
@@ -360,8 +383,13 @@ void Library::drawList() {
 
 void Library::drawDialog(const IRect& anchor, const std::string& title, const std::vector<std::string>& lines,
                          const std::vector<std::pair<Action, std::string>>& buttons) {
-    const int w = canvas_.width() - 2 * 160, buttonH = 130, gap = 24, pad = 50;
-    const int h = pad + 8 * kTitleScale + 30 + static_cast<int>(lines.size()) * 50 + 20 +
+    const int side = std::min(160, canvas_.width() / 16);  // narrower screens need the room for text
+    const int w = canvas_.width() - 2 * side, buttonH = 130, gap = 24, pad = 50;
+    const size_t lineChars = static_cast<size_t>((w - 2 * pad) / (8 * kMessageScale));
+    std::vector<std::string> wrapped;
+    for (const std::string& line : lines)
+        for (std::string& l : wrap(line, lineChars)) wrapped.push_back(std::move(l));
+    const int h = pad + 8 * kTitleScale + 30 + static_cast<int>(wrapped.size()) * 50 + 20 +
                   static_cast<int>(buttons.size()) * (buttonH + gap) + pad - gap;
     const int x0 = (canvas_.width() - w) / 2;
     // Below the row if it fits, else above it, so the tapped row stays visible.
@@ -376,12 +404,11 @@ void Library::drawDialog(const IRect& anchor, const std::string& title, const st
 
     const IRect inner{x0 + pad, y0 + pad, x0 + w - pad, y0 + h - pad};
     const size_t titleChars = static_cast<size_t>(inner.width() / (8 * kTitleScale));
-    const size_t lineChars = static_cast<size_t>(inner.width() / (8 * kMessageScale));
     int y = inner.y0;
     canvas_.drawText(inner.x0, y, ellipsize(title, titleChars), kTitleScale, 0, inner);
     y += 8 * kTitleScale + 30;
-    for (const std::string& line : lines) {
-        canvas_.drawText(inner.x0, y, ellipsize(line, lineChars), kMessageScale, 0, inner);
+    for (const std::string& line : wrapped) {
+        canvas_.drawText(inner.x0, y, line, kMessageScale, 0, inner);
         y += 50;
     }
     y += 20;
@@ -419,6 +446,11 @@ void Library::redrawAll(Refresh mode) {
                        {notebooks_[target_].name, "It goes into the Trash folder next to your notebooks,",
                         "where you can still get it back over USB."},
                        {{Action::Confirm, "DELETE"}, {Action::Cancel, "CANCEL"}});
+            break;
+        case Mode::About:
+            drawList();
+            drawDialog({}, "Scrible " + buildInfo().version, aboutText(platformInfo_, dir_),
+                       {{Action::Cancel, "CLOSE"}});
             break;
     }
     damage_.push_back({canvas_.rect(), mode});
@@ -489,6 +521,7 @@ Library::Intent Library::tap(int x, int y) {
         case Mode::Prompt: return promptResult(prompt_.tap(canvas_, x, y));
         case Mode::Menu:
         case Mode::ConfirmDelete:
+        case Mode::About:
             for (const DialogButton& b : dialogButtons_)
                 if (b.r.contains(x, y)) return perform(b.action);
             if (!dialog_.contains(x, y)) return perform(Action::Cancel);  // tapping outside closes it
@@ -517,7 +550,7 @@ Library::Intent Library::tap(int x, int y) {
 Library::Intent Library::perform(Action a) {
     if (mode_ == Mode::Prompt) return promptResult(prompt_.perform(a));
 
-    if (mode_ == Mode::Menu || mode_ == Mode::ConfirmDelete) {
+    if (dialogOpen()) {
         std::string error;
         switch (a) {
             case Action::Rename: openPrompt(PromptFor::Rename); break;
@@ -542,6 +575,10 @@ Library::Intent Library::perform(Action a) {
 
     switch (a) {
         case Action::NewNotebook: openPrompt(PromptFor::New); return {};
+        case Action::About:
+            mode_ = Mode::About;
+            redrawAll(Refresh::UI);  // black and white, like the menus
+            return {};
         case Action::Exit: return {Intent::Kind::Exit, {}};
         case Action::Sort:
             order_ = order_ == NotebookOrder::Newest ? NotebookOrder::Name : NotebookOrder::Newest;

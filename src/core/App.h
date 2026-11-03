@@ -21,6 +21,7 @@ struct AppOptions {
     // created if missing), and closing it quits.
     std::string notebooksDir;
     std::string file;
+    std::vector<std::string> platformInfo;  // for the About dialog: the device, its libraries
 };
 
 class App {

@@ -70,6 +70,10 @@ std::string FbinkDisplay::describe() const {
     return buf;
 }
 
+std::string FbinkDisplay::aboutLine() const {
+    return std::string("Kindle ") + s_->fb.device_name + " (" + s_->fb.device_codename + "), FBInk " + fbink_version();
+}
+
 void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
     if (s_->fd < 0) return;
     for (const Damage& d : damage) {

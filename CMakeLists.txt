@@ -39,6 +39,7 @@ function(scrible_warnings target)
 endfunction()
 
 add_library(scrible_core STATIC
+  src/core/About.cpp
   src/core/App.cpp
   src/core/Canvas.cpp
   src/core/Document.cpp
@@ -60,6 +61,14 @@ add_library(scrible_core STATIC
   src/core/XoppFile.cpp)
 target_include_directories(scrible_core PUBLIC src/core)
 target_compile_definitions(scrible_core PRIVATE SCRIBLE_VERSION="${PROJECT_VERSION}")
+# The commit being built, for the About dialog; checked on every build.
+set(SCRIBLE_BUILD_INFO "${CMAKE_BINARY_DIR}/generated/BuildInfo.h")
+add_custom_target(scrible_build_info
+  COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DOUT=${SCRIBLE_BUILD_INFO}
+          -P "${CMAKE_SOURCE_DIR}/cmake/build-info.cmake"
+  BYPRODUCTS "${SCRIBLE_BUILD_INFO}")
+add_dependencies(scrible_core scrible_build_info)
+target_include_directories(scrible_core PRIVATE "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(scrible_core PUBLIC ZLIB::ZLIB PRIVATE pugixml::pugixml)
 scrible_warnings(scrible_core)
 

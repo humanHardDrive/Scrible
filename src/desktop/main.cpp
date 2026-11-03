@@ -141,6 +141,9 @@ int main(int argc, char** argv) {
     aopts.editor.render.antialias = !args.einkSim;  // like the Kindle: hard-edged ink
     if (scrible::isNotebookFile(args.path)) aopts.file = args.path;
     else aopts.notebooksDir = args.path;
+    const int sdl = SDL_GetVersion();
+    aopts.platformInfo = {"Desktop build, SDL " + std::to_string(SDL_VERSIONNUM_MAJOR(sdl)) + "." +
+                          std::to_string(SDL_VERSIONNUM_MINOR(sdl)) + "." + std::to_string(SDL_VERSIONNUM_MICRO(sdl))};
     scrible::App app(args.width, args.height, aopts);
     if (!app.startupError().empty()) {
         std::fprintf(stderr, "%s\n", app.startupError().c_str());

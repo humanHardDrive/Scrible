@@ -27,6 +27,7 @@ App::App(int width, int height, AppOptions opts) : width_(width), height_(height
         settings_ = std::make_unique<Settings>(opts_.notebooksDir + "/.scrible");
         library_ = std::make_unique<Library>(width_, height_, opts_.notebooksDir, settings_.get(),
                                              opts_.editor.toolbarHeight);
+        library_->setPlatformInfo(opts_.platformInfo);
     } else if (!openNotebook(opts_.file, error)) {
         startupError_ = error;
         quit_ = true;

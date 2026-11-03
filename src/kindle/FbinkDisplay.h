@@ -33,6 +33,7 @@ public:
     int dpi() const;
     TouchQuirks touchQuirks() const;
     std::string describe() const;
+    std::string aboutLine() const;  // "Kindle Scribe (Barolo), FBInk v1.25.0"
 
     void present(const Canvas& c, const std::vector<Damage>& damage);
 
