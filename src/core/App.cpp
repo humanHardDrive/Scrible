@@ -7,7 +7,7 @@
 
 #include "XoppFile.h"
 
-namespace xs {
+namespace scrible {
 
 App::App(int width, int height, AppOptions opts) : width_(width), height_(height), opts_(std::move(opts)) {
     std::string error;
@@ -17,7 +17,7 @@ App::App(int width, int height, AppOptions opts) : width_(width), height_(height
             quit_ = true;
             return;
         }
-        settings_ = std::make_unique<Settings>(opts_.notebooksDir + "/.xournal-scribe");
+        settings_ = std::make_unique<Settings>(opts_.notebooksDir + "/.scrible");
         library_ = std::make_unique<Library>(width_, height_, opts_.notebooksDir, settings_.get(),
                                              opts_.editor.toolbarHeight);
     } else if (!openNotebook(opts_.file, error)) {
@@ -31,7 +31,7 @@ bool App::openNotebook(const std::string& path, std::string& error) {
     if (access(path.c_str(), F_OK) == 0) {  // otherwise it's a new notebook, saved on first change
         std::vector<std::string> warnings;
         if (!loadXopp(path, doc, error, &warnings)) return false;
-        for (const auto& w : warnings) std::fprintf(stderr, "xscribe: %s: %s\n", path.c_str(), w.c_str());
+        for (const auto& w : warnings) std::fprintf(stderr, "scrible: %s: %s\n", path.c_str(), w.c_str());
     }
     EditorOptions eo = opts_.editor;
     eo.fromList = library_ != nullptr;
@@ -140,4 +140,4 @@ bool App::saveNow(uint64_t now) {
     return editor_->save(now, true);
 }
 
-}  // namespace xs
+}  // namespace scrible

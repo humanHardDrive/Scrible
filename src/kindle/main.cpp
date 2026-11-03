@@ -2,8 +2,8 @@
 // Meant to be started by kindle/run.sh (from a library scriptlet), which gets
 // the Kindle's own UI out of the way first and restores it afterwards.
 //
-//   xscribe [NOTEBOOKS-FOLDER | notebook.xopp] [options]
-//     A folder (default /mnt/us/xournal-scribe/notebooks) opens the notebook list;
+//   scrible [NOTEBOOKS-FOLDER | notebook.xopp] [options]
+//     A folder (default /mnt/us/scrible/notebooks) opens the notebook list;
 //     a .xopp/.xoj file opens just that notebook.
 //     --pen DEV, --touch DEV     input devices (default: auto-detect)
 //     --pen-transform SPEC       axis fix-ups, e.g. "swap,flipx" (swap is applied first)
@@ -42,7 +42,7 @@ uint64_t nowMs() {
 }
 
 struct Args {
-    std::string path = "/mnt/us/xournal-scribe/notebooks";
+    std::string path = "/mnt/us/scrible/notebooks";
     std::string penDev, touchDev;
     std::string penTransform, touchTransform;
     bool grab = true;
@@ -82,8 +82,8 @@ struct PressureStats {
         ++buckets[std::clamp(static_cast<int>(p * 10 + 0.5), 0, 10)];
         ++total;
     }
-    void log(const xs::PenInput& pen) const {
-        std::fprintf(stderr, "xscribe: pressure from %s, %u samples:", pen.pressureOrigin(), total);
+    void log(const scrible::PenInput& pen) const {
+        std::fprintf(stderr, "scrible: pressure from %s, %u samples:", pen.pressureOrigin(), total);
         for (int i = 0; i <= 10 && total; ++i)
             if (buckets[i]) std::fprintf(stderr, " %.1f=%u%%", i / 10.0, (buckets[i] * 100 + total / 2) / total);
         std::fprintf(stderr, "\n");
@@ -91,33 +91,33 @@ struct PressureStats {
 };
 
 // Opens the pen, plus a separate pressure source if the device has one.
-bool openPen(xs::PenInput& pen, const std::vector<xs::InputDeviceInfo>& devices, const std::string& penPath,
-             int w, int h, const xs::InputTransform& t, bool grab, std::string& err) {
+bool openPen(scrible::PenInput& pen, const std::vector<scrible::InputDeviceInfo>& devices, const std::string& penPath,
+             int w, int h, const scrible::InputTransform& t, bool grab, std::string& err) {
     if (penPath.empty() || !pen.open(penPath, w, h, t, grab, err)) return false;
-    if (const auto* src = xs::pickPressureSource(devices, penPath)) {
+    if (const auto* src = scrible::pickPressureSource(devices, penPath)) {
         std::string srcErr;
         if (pen.openPressureSource(src->path, srcErr))
-            std::fprintf(stderr, "xscribe: pressure source %s (\"%s\")\n", src->path.c_str(), src->name.c_str());
+            std::fprintf(stderr, "scrible: pressure source %s (\"%s\")\n", src->path.c_str(), src->name.c_str());
         else
-            std::fprintf(stderr, "xscribe: can't use pressure source: %s\n", srcErr.c_str());
+            std::fprintf(stderr, "scrible: can't use pressure source: %s\n", srcErr.c_str());
     }
     return true;
 }
 
 // Full-screen message for errors the user needs to see (there's no terminal on the device).
-void showMessage(xs::FbinkDisplay& display, const std::vector<std::string>& lines) {
-    xs::Canvas c(display.width(), display.height());
+void showMessage(scrible::FbinkDisplay& display, const std::vector<std::string>& lines) {
+    scrible::Canvas c(display.width(), display.height());
     int y = display.height() / 3;
     for (const auto& line : lines) {
         c.drawText(60, y, line, 4, 0, c.rect());
         y += 64;
     }
-    display.present(c, {{c.rect(), xs::Refresh::Full}});
+    display.present(c, {{c.rect(), scrible::Refresh::Full}});
 }
 
-int probe(xs::FbinkDisplay& display, const Args& args, const xs::InputTransform& penT, const xs::InputTransform& touchT) {
+int probe(scrible::FbinkDisplay& display, const Args& args, const scrible::InputTransform& penT, const scrible::InputTransform& touchT) {
     std::printf("display: %s\n", display.describe().c_str());
-    const auto devices = xs::scanInputDevices();
+    const auto devices = scrible::scanInputDevices();
     for (const auto& d : devices) {
         std::printf("%s  %-24s %s", d.path.c_str(), ("\"" + d.name + "\"").c_str(),
                     d.isPen ? "pen" : d.isTouch ? "touch" : "-");
@@ -125,8 +125,8 @@ int probe(xs::FbinkDisplay& display, const Args& args, const xs::InputTransform&
         if (d.isPen) std::printf("  pressure %d..%d", d.pressure.min, d.pressure.max);
         std::printf("\n");
     }
-    const auto* penInfo = xs::pickPen(devices);
-    const auto* touchInfo = xs::pickTouch(devices);
+    const auto* penInfo = scrible::pickPen(devices);
+    const auto* touchInfo = scrible::pickTouch(devices);
     const std::string penPath = !args.penDev.empty() ? args.penDev : penInfo ? penInfo->path : "";
     const std::string touchPath = !args.touchDev.empty() ? args.touchDev : touchInfo ? touchInfo->path : "";
     std::printf("using pen %s, touch %s\n", penPath.empty() ? "(none)" : penPath.c_str(),
@@ -135,8 +135,8 @@ int probe(xs::FbinkDisplay& display, const Args& args, const xs::InputTransform&
                 args.probeSeconds, display.width(), display.height());
     std::fflush(stdout);
 
-    xs::PenInput pen;
-    xs::TouchInput touch;
+    scrible::PenInput pen;
+    scrible::TouchInput touch;
     std::string err;
     std::fflush(stdout);
     if (!openPen(pen, devices, penPath, display.width(), display.height(), penT, args.grab, err))
@@ -146,14 +146,14 @@ int probe(xs::FbinkDisplay& display, const Args& args, const xs::InputTransform&
 
     // Draw where we think the pen/finger is: if the marks don't appear under the
     // tip, the axes need a --pen-transform / --touch-transform.
-    xs::Canvas c(display.width(), display.height());
+    scrible::Canvas c(display.width(), display.height());
     int y = 200;
     for (const char* line : {"INPUT TEST", "", "Draw near each corner with the pen,", "then tap each corner with a finger.",
-                             "Marks should appear under the tip.", "", "Ends by itself; log: xscribe.log"}) {
+                             "Marks should appear under the tip.", "", "Ends by itself; log: scrible.log"}) {
         c.drawText(60, y, line, 4, 0, c.rect());
         y += 64;
     }
-    display.present(c, {{c.rect(), xs::Refresh::Full}});
+    display.present(c, {{c.rect(), scrible::Refresh::Full}});
 
     const char* kinds[] = {"down", "move", "up"};
     PressureStats stats;
@@ -161,27 +161,27 @@ int probe(xs::FbinkDisplay& display, const Args& args, const xs::InputTransform&
     while (!g_quit && nowMs() < end) {
         pollfd fds[3] = {{pen.fd(), POLLIN, 0}, {touch.fd(), POLLIN, 0}, {pen.pressureFd(), POLLIN, 0}};
         if (poll(fds, 3, 250) <= 0) continue;
-        std::vector<xs::PenEvent> pe;
-        std::vector<xs::TouchEvent> te;
+        std::vector<scrible::PenEvent> pe;
+        std::vector<scrible::TouchEvent> te;
         pen.readPressure();
         if (pen.fd() >= 0) pen.read(pe);
         if (touch.fd() >= 0) touch.read(te);
-        std::vector<xs::Damage> marks;
+        std::vector<scrible::Damage> marks;
         for (const auto& e : pe) {
             std::printf("pen   %-4s %7.1f %7.1f  pressure %.2f%s\n", kinds[static_cast<int>(e.type)], e.x, e.y,
                         e.pressure, e.eraser ? "  eraser" : "");
-            if (e.type != xs::PenEvent::Type::Up) stats.add(e.pressure);
+            if (e.type != scrible::PenEvent::Type::Up) stats.add(e.pressure);
             const int r = 2 + static_cast<int>(e.pressure * 6);
-            const xs::IRect m{int(e.x) - r, int(e.y) - r, int(e.x) + r + 1, int(e.y) + r + 1};
+            const scrible::IRect m{int(e.x) - r, int(e.y) - r, int(e.x) + r + 1, int(e.y) + r + 1};
             c.fill(m, 0);
-            marks.push_back({m, xs::Refresh::Ink});
+            marks.push_back({m, scrible::Refresh::Ink});
         }
         for (const auto& e : te) {
             std::printf("touch %-4s %7.1f %7.1f\n", kinds[static_cast<int>(e.type)], e.x, e.y);
-            if (e.type != xs::TouchEvent::Type::Down) continue;
-            const xs::IRect m{int(e.x) - 30, int(e.y) - 30, int(e.x) + 30, int(e.y) + 30};
+            if (e.type != scrible::TouchEvent::Type::Down) continue;
+            const scrible::IRect m{int(e.x) - 30, int(e.y) - 30, int(e.x) + 30, int(e.y) + 30};
             c.strokeRect(m, 6, 0);
-            marks.push_back({m, xs::Refresh::UI});
+            marks.push_back({m, scrible::Refresh::UI});
         }
         display.present(c, marks);
         std::fflush(stdout);
@@ -210,70 +210,70 @@ int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
 
     // Before opening anything else, so the child doesn't inherit our descriptors.
-    xs::PowerEvents power;
-    if (args.probeSeconds < 0 && !power.start()) std::fprintf(stderr, "xscribe: no sleep/wake notifications\n");
+    scrible::PowerEvents power;
+    if (args.probeSeconds < 0 && !power.start()) std::fprintf(stderr, "scrible: no sleep/wake notifications\n");
 
-    xs::FbinkDisplay display;
-    xs::DisplayOptions dopts;
+    scrible::FbinkDisplay display;
+    scrible::DisplayOptions dopts;
     dopts.penMode = args.penMode;
     if (!display.open(dopts)) return 1;
-    std::fprintf(stderr, "xscribe: %s\n", display.describe().c_str());
+    std::fprintf(stderr, "scrible: %s\n", display.describe().c_str());
 
-    xs::InputTransform penT, touchT;
-    const xs::TouchQuirks q = display.touchQuirks();
+    scrible::InputTransform penT, touchT;
+    const scrible::TouchQuirks q = display.touchQuirks();
     touchT.swapAxes = q.swapAxes;
     touchT.mirrorX = q.mirrorX;
     touchT.mirrorY = q.mirrorY;
-    if ((!args.penTransform.empty() && !xs::InputTransform::parse(args.penTransform, penT)) ||
-        (!args.touchTransform.empty() && !xs::InputTransform::parse(args.touchTransform, touchT))) {
-        std::fprintf(stderr, "xscribe: transforms are comma-separated: swap, flipx, flipy\n");
+    if ((!args.penTransform.empty() && !scrible::InputTransform::parse(args.penTransform, penT)) ||
+        (!args.touchTransform.empty() && !scrible::InputTransform::parse(args.touchTransform, touchT))) {
+        std::fprintf(stderr, "scrible: transforms are comma-separated: swap, flipx, flipy\n");
         return 2;
     }
 
     if (args.probeSeconds >= 0) return probe(display, args, penT, touchT);
 
-    const auto devices = xs::scanInputDevices();
-    const auto* penInfo = xs::pickPen(devices);
-    const auto* touchInfo = xs::pickTouch(devices);
+    const auto devices = scrible::scanInputDevices();
+    const auto* penInfo = scrible::pickPen(devices);
+    const auto* touchInfo = scrible::pickTouch(devices);
     const std::string penPath = !args.penDev.empty() ? args.penDev : penInfo ? penInfo->path : "";
     const std::string touchPath = !args.touchDev.empty() ? args.touchDev : touchInfo ? touchInfo->path : "";
 
-    xs::PenInput pen;
-    xs::TouchInput touch;
+    scrible::PenInput pen;
+    scrible::TouchInput touch;
     std::string err;
     if (!openPen(pen, devices, penPath, display.width(), display.height(), penT, args.grab, err)) {
-        std::fprintf(stderr, "xscribe: no usable pen device %s\n", err.c_str());
-        showMessage(display, {"No pen input device found.", "Run xscribe --probe over SSH for details."});
+        std::fprintf(stderr, "scrible: no usable pen device %s\n", err.c_str());
+        showMessage(display, {"No pen input device found.", "Run scrible --probe over SSH for details."});
         sleep(6);
         return 1;
     }
     if (touchPath.empty() || !touch.open(touchPath, display.width(), display.height(), touchT, args.grab, err))
-        std::fprintf(stderr, "xscribe: no touch input (%s); the toolbar still works with the pen\n", err.c_str());
-    std::fprintf(stderr, "xscribe: pen %s, touch %s, opening %s\n", penPath.c_str(),
+        std::fprintf(stderr, "scrible: no touch input (%s); the toolbar still works with the pen\n", err.c_str());
+    std::fprintf(stderr, "scrible: pen %s, touch %s, opening %s\n", penPath.c_str(),
                  touch.fd() >= 0 ? touchPath.c_str() : "(none)", args.path.c_str());
 
-    xs::AppOptions aopts;
+    scrible::AppOptions aopts;
     aopts.editor.dpi = display.dpi();
     aopts.editor.render.antialias = false;  // what DU shows while writing is then exactly the final stroke
-    if (xs::isNotebookFile(args.path)) aopts.file = args.path;
+    if (scrible::isNotebookFile(args.path)) aopts.file = args.path;
     else aopts.notebooksDir = args.path;
-    xs::App app(display.width(), display.height(), aopts);
+    scrible::App app(display.width(), display.height(), aopts);
     if (!app.startupError().empty()) {
-        std::fprintf(stderr, "xscribe: %s\n", app.startupError().c_str());
+        std::fprintf(stderr, "scrible: %s\n", app.startupError().c_str());
         showMessage(display, {"Can't open:", args.path, app.startupError(), "", "Nothing was changed."});
         sleep(6);
         return 1;
     }
     display.present(app.canvas(), app.takeDamage());
 
-    std::vector<xs::PenEvent> penEvents;
-    std::vector<xs::TouchEvent> touchEvents;
+    std::vector<scrible::PenEvent> penEvents;
+    std::vector<scrible::TouchEvent> touchEvents;
     PressureStats stats;
     while (!g_quit && !app.quitRequested()) {
         pollfd fds[4] = {{pen.fd(), POLLIN, 0}, {touch.fd(), POLLIN, 0}, {power.fd(), POLLIN, 0},
                          {pen.pressureFd(), POLLIN, 0}};
         if (poll(fds, 4, app.msUntilIdleWork(nowMs())) < 0 && errno != EINTR) {
-            std::perror("xscribe: poll");
+            std::perror("scrible: poll");
             break;
         }
         const uint64_t now = nowMs();
@@ -282,24 +282,24 @@ int main(int argc, char** argv) {
         penEvents.clear();
         if (fds[0].revents & POLLIN) pen.read(penEvents);
         for (const auto& e : penEvents) {
-            if (e.type != xs::PenEvent::Type::Up) stats.add(e.pressure);
-            const xs::PenSample s{e.x, e.y, e.pressure, e.eraser};
+            if (e.type != scrible::PenEvent::Type::Up) stats.add(e.pressure);
+            const scrible::PenSample s{e.x, e.y, e.pressure, e.eraser};
             switch (e.type) {
-                case xs::PenEvent::Type::Down: app.penDown(s, now); break;
-                case xs::PenEvent::Type::Move: app.penMove(s, now); break;
-                case xs::PenEvent::Type::Up: app.penUp(now); break;
+                case scrible::PenEvent::Type::Down: app.penDown(s, now); break;
+                case scrible::PenEvent::Type::Move: app.penMove(s, now); break;
+                case scrible::PenEvent::Type::Up: app.penUp(now); break;
             }
         }
 
         touchEvents.clear();
         if (fds[1].revents & POLLIN) touch.read(touchEvents);
         for (const auto& e : touchEvents)
-            if (e.type == xs::TouchEvent::Type::Down) app.touchDown(static_cast<int>(e.x), static_cast<int>(e.y), now);
+            if (e.type == scrible::TouchEvent::Type::Down) app.touchDown(static_cast<int>(e.x), static_cast<int>(e.y), now);
 
         if (fds[2].revents & (POLLIN | POLLHUP)) {
             for (const auto ev : power.read()) {
-                if (ev == xs::PowerEvents::Event::GoingToSleep) app.saveNow(now);
-                if (ev == xs::PowerEvents::Event::WokeUp) app.redrawAll(xs::Refresh::Full);
+                if (ev == scrible::PowerEvents::Event::GoingToSleep) app.saveNow(now);
+                if (ev == scrible::PowerEvents::Event::WokeUp) app.redrawAll(scrible::Refresh::Full);
             }
         }
 

@@ -6,7 +6,7 @@
 
 #include "Document.h"
 
-namespace xs {
+namespace scrible {
 
 // The eraser is a disc of `radius` swept from `from` to `to` (equal for a single
 // position). Ink counts as erased where the stroke's centreline comes within
@@ -16,4 +16,4 @@ namespace xs {
 bool eraseFromStroke(const Stroke& s, const StrokePoint& from, const StrokePoint& to, double radius,
                      std::vector<Stroke>& pieces);
 
-}  // namespace xs
+}  // namespace scrible

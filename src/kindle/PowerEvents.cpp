@@ -7,7 +7,7 @@
 
 #include <cerrno>
 
-namespace xs {
+namespace scrible {
 
 bool PowerEvents::start() {
     int p[2];
@@ -69,4 +69,4 @@ std::vector<PowerEvents::Event> PowerEvents::read() {
     return out;
 }
 
-}  // namespace xs
+}  // namespace scrible

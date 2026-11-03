@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <fstream>
 
-namespace xs {
+namespace scrible {
 
 Settings::Settings(std::string path) : path_(std::move(path)) {
     std::ifstream in(path_);
@@ -27,11 +27,11 @@ void Settings::set(const std::string& key, const std::string& value) {
         std::ofstream out(tmp, std::ios::trunc);
         for (const auto& [k, v] : values_) out << k << '=' << v << '\n';
         if (!out) {
-            std::fprintf(stderr, "xscribe: can't write %s\n", tmp.c_str());
+            std::fprintf(stderr, "scrible: can't write %s\n", tmp.c_str());
             return;
         }
     }
-    if (std::rename(tmp.c_str(), path_.c_str()) != 0) std::fprintf(stderr, "xscribe: can't write %s\n", path_.c_str());
+    if (std::rename(tmp.c_str(), path_.c_str()) != 0) std::fprintf(stderr, "scrible: can't write %s\n", path_.c_str());
 }
 
-}  // namespace xs
+}  // namespace scrible

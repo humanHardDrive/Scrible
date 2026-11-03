@@ -1,14 +1,14 @@
 #!/bin/sh
-# Starts Xournal-Scribe. Normally run by the library scriptlets in /mnt/us/documents
-# (via sh_integration, as root) or by `kpm launch xournal-scribe`.
+# Starts Scrible. Normally run by the library scriptlets in /mnt/us/documents
+# (via sh_integration, as root) or by `kpm launch scrible`.
 # Gets the Kindle UI out of the way (the same steps KOReader takes on firmware 5.x),
 # runs the app, then puts everything back. Extra arguments go to the app,
 # e.g. `run.sh --probe 30`.
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 NOTEBOOKS="${APP_DIR}/notebooks"
-LOG="${APP_DIR}/xscribe.log"
-FB_DUMP="/var/tmp/xscribe-fb.dump"
+LOG="${APP_DIR}/scrible.log"
+FB_DUMP="/var/tmp/scrible-fb.dump"
 
 if [ -f "${LOG}" ]; then
     tail -c 200000 "${LOG}" >"${LOG}.tmp" && mv -f "${LOG}.tmp" "${LOG}"
@@ -16,9 +16,33 @@ fi
 exec >>"${LOG}" 2>&1
 echo "=== $(date) starting $*"
 
-# Version 0.1 kept a single notebook next to the app; move it into the notebook list.
-if [ -f "${APP_DIR}/notebook.xopp" ] && [ ! -e "${NOTEBOOKS}/notebook.xopp" ]; then
-    mkdir -p "${NOTEBOOKS}" && mv "${APP_DIR}/notebook.xopp" "${NOTEBOOKS}/notebook.xopp"
+# Before the rename the app was Xournal-Scribe, in /mnt/us/xournal-scribe. Bring its
+# notebooks over (and version 0.1's single notebook.xopp) and remove the old app;
+# anything whose name is already taken here stays behind, so nothing is overwritten.
+OLD_DIR=/mnt/us/xournal-scribe
+move_if_free() {
+    [ -e "$1" ] && [ ! -e "$2" ] && mv "$1" "$2"
+}
+if [ -d "${OLD_DIR}" ] && [ "${OLD_DIR}" != "${APP_DIR}" ]; then
+    echo "moving notebooks over from ${OLD_DIR}"
+    mkdir -p "${NOTEBOOKS}/Trash"
+    move_if_free "${OLD_DIR}/notebooks/.xournal-scribe" "${NOTEBOOKS}/.scrible"
+    rm -f "${OLD_DIR}/notebooks/.xournal-scribe"
+    for f in "${OLD_DIR}/notebooks/Trash/"* "${OLD_DIR}/notebooks/Trash/".[!.]*; do
+        move_if_free "${f}" "${NOTEBOOKS}/Trash/$(basename "${f}")"
+    done
+    rmdir "${OLD_DIR}/notebooks/Trash" 2>/dev/null
+    for f in "${OLD_DIR}/notebooks/"* "${OLD_DIR}/notebooks/".[!.]* "${OLD_DIR}/notebook.xopp"; do
+        move_if_free "${f}" "${NOTEBOOKS}/$(basename "${f}")"
+    done
+    rmdir "${NOTEBOOKS}/Trash" 2>/dev/null
+    for s in /mnt/us/documents/xournal-scribe.sh /mnt/us/documents/xournal-scribe-input-test.sh; do
+        grep -q "${OLD_DIR}/run.sh" "${s}" 2>/dev/null && rm -f "${s}"
+    done
+    rm -rf "${OLD_DIR}/bin"
+    rm -f "${OLD_DIR}/run.sh" "${OLD_DIR}/LICENSE" "${OLD_DIR}/LICENSE.FBInk" "${OLD_DIR}/NOTICE" \
+        "${OLD_DIR}/xscribe.log" "${OLD_DIR}/xscribe.log.tmp"
+    rmdir "${OLD_DIR}/notebooks" "${OLD_DIR}" 2>/dev/null
 fi
 
 STATUSBAR_STOPPED=no
@@ -52,8 +76,8 @@ fi
 lipc-set-prop com.lab126.powerd preventScreenSaver 1
 
 # Copying over USB/MTP can drop the executable bit.
-chmod +x "${APP_DIR}/bin/xscribe" 2>/dev/null
-"${APP_DIR}/bin/xscribe" "${NOTEBOOKS}" "$@"
+chmod +x "${APP_DIR}/bin/scrible" 2>/dev/null
+"${APP_DIR}/bin/scrible" "${NOTEBOOKS}" "$@"
 echo "=== exited with status $?"
 
 restore

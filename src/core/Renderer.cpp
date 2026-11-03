@@ -3,7 +3,7 @@
 #include <cmath>
 #include <vector>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 constexpr double kMinRadius = 0.6;  // px; keeps hairlines visible
@@ -251,4 +251,4 @@ IRect drawLiveSegment(Canvas& c, const Stroke& s, size_t i, const PageTransform&
     return capsuleBounds(ax, ay, bx, by, r).intersected(cl);
 }
 
-}  // namespace xs
+}  // namespace scrible

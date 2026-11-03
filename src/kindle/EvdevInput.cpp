@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 constexpr size_t kLongBits = sizeof(unsigned long) * 8;
@@ -133,7 +133,7 @@ bool EvdevDevice::open(const std::string& path, int screenWidth, int screenHeigh
     height_ = screenHeight;
     transform_ = t;
     if (grab && ioctl(fd_, EVIOCGRAB, 1) < 0)
-        std::fprintf(stderr, "xscribe: couldn't grab %s: %s\n", path.c_str(), std::strerror(errno));
+        std::fprintf(stderr, "scrible: couldn't grab %s: %s\n", path.c_str(), std::strerror(errno));
     return true;
 }
 
@@ -328,4 +328,4 @@ void TouchInput::read(std::vector<TouchEvent>& out) {
     });
 }
 
-}  // namespace xs
+}  // namespace scrible

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace xs {
+namespace scrible {
 
 // Integer pixel rectangle, half-open: [x0, x1) x [y0, y1).
 struct IRect {
@@ -65,4 +65,4 @@ inline double distSqToSegment(double px, double py, double ax, double ay, double
     return cx * cx + cy * cy;
 }
 
-}  // namespace xs
+}  // namespace scrible

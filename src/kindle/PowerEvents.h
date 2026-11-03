@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace xs {
+namespace scrible {
 
 // Sleep/wake notifications from the Kindle's power daemon, via a
 // `lipc-wait-event` child process (avoids linking Amazon's liblipc).
@@ -25,4 +25,4 @@ private:
     std::string pending_;
 };
 
-}  // namespace xs
+}  // namespace scrible

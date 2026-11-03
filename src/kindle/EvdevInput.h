@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace xs {
+namespace scrible {
 
 // Maps raw device axes onto the screen: swap first, then mirror (FBInk's convention).
 struct InputTransform {
@@ -118,4 +118,4 @@ private:
     bool dropped_ = false;
 };
 
-}  // namespace xs
+}  // namespace scrible

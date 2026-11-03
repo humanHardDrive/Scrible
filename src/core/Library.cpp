@@ -12,7 +12,7 @@
 #include <cstring>
 #include <fstream>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 constexpr int kMargin = 60;
@@ -222,7 +222,7 @@ bool renameNotebook(const NotebookInfo& nb, const std::string& newName, std::str
     for (const std::string& suffix : companions) {
         const std::string from = dir + "/" + file + suffix, to = newPath + suffix;
         if (std::rename(from.c_str(), to.c_str()) != 0)
-            std::fprintf(stderr, "xscribe: can't rename %s: %s\n", from.c_str(), std::strerror(errno));
+            std::fprintf(stderr, "scrible: can't rename %s: %s\n", from.c_str(), std::strerror(errno));
     }
     return true;
 }
@@ -239,7 +239,7 @@ bool duplicateNotebook(const NotebookInfo& nb, const std::string& newName, std::
     for (const std::string& suffix : companionSuffixes(dir, file)) {
         std::string ignored;
         if (!copyFile(dir + "/" + file + suffix, newPath + suffix, ignored))
-            std::fprintf(stderr, "xscribe: %s\n", ignored.c_str());
+            std::fprintf(stderr, "scrible: %s\n", ignored.c_str());
     }
     return true;
 }
@@ -260,7 +260,7 @@ bool trashNotebook(const NotebookInfo& nb, std::string& error) {
     for (const std::string& suffix : companions) {
         const std::string from = dir + "/" + file + suffix, to = target + suffix;
         if (std::rename(from.c_str(), to.c_str()) != 0)
-            std::fprintf(stderr, "xscribe: can't move %s: %s\n", from.c_str(), std::strerror(errno));
+            std::fprintf(stderr, "scrible: can't move %s: %s\n", from.c_str(), std::strerror(errno));
     }
     return true;
 }
@@ -569,4 +569,4 @@ std::vector<Damage> Library::takeDamage() {
     return out;
 }
 
-}  // namespace xs
+}  // namespace scrible

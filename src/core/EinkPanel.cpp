@@ -1,6 +1,6 @@
 #include "EinkPanel.h"
 
-namespace xs {
+namespace scrible {
 
 EinkPanel::EinkPanel(int width, int height) : submitted_(width, height), shown_(width, height) {}
 
@@ -22,4 +22,4 @@ void EinkPanel::refresh(const Canvas& c, const Damage& d) {
     }
 }
 
-}  // namespace xs
+}  // namespace scrible

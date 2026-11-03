@@ -3,9 +3,9 @@
 // imitates the e-ink panel (see EinkPanel): hard-edged ink, and refresh
 // artifacts such as DU leaving gray pixels unchanged show up as on the device.
 //
-//   xscribe-desktop [FOLDER | notebook.xopp] [--size 1860x2480] [--no-eink-sim]
+//   scrible-desktop [FOLDER | notebook.xopp] [--size 1860x2480] [--no-eink-sim]
 //
-// A folder (default ~/Documents/Xournal-Scribe) opens the notebook list; a
+// A folder (default ~/Documents/Scrible) opens the notebook list; a
 // .xopp/.xoj file opens just that notebook.
 // Mouse: left = pen, right = eraser. A drawing tablet gets real pressure.
 // Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, Cmd/Ctrl+S save,
@@ -50,7 +50,7 @@ bool parseArgs(int argc, char** argv, Args& a) {
 class Window {
 public:
     bool open(int w, int h, bool einkSim) {
-        if (einkSim) panel_ = std::make_unique<xs::EinkPanel>(w, h);
+        if (einkSim) panel_ = std::make_unique<scrible::EinkPanel>(w, h);
         SDL_SetHint(SDL_HINT_PEN_MOUSE_EVENTS, "0");  // tablet input arrives as pen events only
         SDL_SetHint(SDL_HINT_PEN_TOUCH_EVENTS, "0");
         if (!SDL_Init(SDL_INIT_VIDEO)) return fail("SDL_Init");
@@ -59,7 +59,7 @@ public:
         float scale = 0.35f;
         if (const SDL_DisplayMode* m = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay()))
             scale = std::min(0.9f * m->h / h, 0.9f * m->w / w);
-        if (!SDL_CreateWindowAndRenderer("Xournal-Scribe", static_cast<int>(w * scale), static_cast<int>(h * scale),
+        if (!SDL_CreateWindowAndRenderer("Scrible", static_cast<int>(w * scale), static_cast<int>(h * scale),
                                          SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY, &window_, &renderer_))
             return fail("SDL_CreateWindowAndRenderer");
         SDL_SetRenderLogicalPresentation(renderer_, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
@@ -76,12 +76,12 @@ public:
         SDL_Quit();
     }
 
-    void present(const xs::Canvas& c, const std::vector<xs::Damage>& damage) {
-        for (const xs::Damage& d : damage) {
-            const xs::IRect r = d.rect.intersected(c.rect());
+    void present(const scrible::Canvas& c, const std::vector<scrible::Damage>& damage) {
+        for (const scrible::Damage& d : damage) {
+            const scrible::IRect r = d.rect.intersected(c.rect());
             if (r.empty()) continue;
             if (panel_) panel_->refresh(c, d);
-            const xs::Canvas& shown = panel_ ? panel_->shown() : c;
+            const scrible::Canvas& shown = panel_ ? panel_->shown() : c;
             const SDL_Rect sr{r.x0, r.y0, r.width(), r.height()};
             void* pixels = nullptr;
             int pitch = 0;
@@ -116,7 +116,7 @@ private:
         return false;
     }
 
-    std::unique_ptr<xs::EinkPanel> panel_;  // null with --no-eink-sim
+    std::unique_ptr<scrible::EinkPanel> panel_;  // null with --no-eink-sim
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
     SDL_Texture* texture_ = nullptr;
@@ -132,14 +132,14 @@ int main(int argc, char** argv) {
     }
     if (args.path.empty()) {
         const char* home = std::getenv("HOME");
-        args.path = std::string(home ? home : ".") + "/Documents/Xournal-Scribe";
+        args.path = std::string(home ? home : ".") + "/Documents/Scrible";
     }
 
-    xs::AppOptions aopts;
+    scrible::AppOptions aopts;
     aopts.editor.render.antialias = !args.einkSim;  // like the Kindle: hard-edged ink
-    if (xs::isNotebookFile(args.path)) aopts.file = args.path;
+    if (scrible::isNotebookFile(args.path)) aopts.file = args.path;
     else aopts.notebooksDir = args.path;
-    xs::App app(args.width, args.height, aopts);
+    scrible::App app(args.width, args.height, aopts);
     if (!app.startupError().empty()) {
         std::fprintf(stderr, "%s\n", app.startupError().c_str());
         return 1;
@@ -199,28 +199,28 @@ int main(int argc, char** argv) {
                 case SDL_EVENT_KEY_DOWN: {
                     const bool cmd = ev.key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL);
                     const bool shift = ev.key.mod & SDL_KMOD_SHIFT;
-                    xs::Action a = xs::Action::None;
+                    scrible::Action a = scrible::Action::None;
                     switch (ev.key.key) {
-                        case SDLK_Z: if (cmd) a = shift ? xs::Action::Redo : xs::Action::Undo; break;
-                        case SDLK_Y: if (cmd) a = xs::Action::Redo; break;
-                        case SDLK_S: if (cmd) a = xs::Action::Save; break;
-                        case SDLK_P: a = xs::Action::Pen; break;
-                        case SDLK_H: a = xs::Action::Highlighter; break;
-                        case SDLK_E: a = xs::Action::Eraser; break;
-                        case SDLK_1: a = xs::Action::SizeFine; break;
-                        case SDLK_2: a = xs::Action::SizeMedium; break;
-                        case SDLK_3: a = xs::Action::SizeThick; break;
-                        case SDLK_LEFT: a = xs::Action::PrevPage; break;
-                        case SDLK_RIGHT: a = xs::Action::NextPage; break;
-                        case SDLK_N: if (!cmd) a = xs::Action::NewNotebook; break;
-                        case SDLK_RETURN: a = xs::Action::Confirm; break;
-                        case SDLK_ESCAPE: a = xs::Action::Exit; break;
+                        case SDLK_Z: if (cmd) a = shift ? scrible::Action::Redo : scrible::Action::Undo; break;
+                        case SDLK_Y: if (cmd) a = scrible::Action::Redo; break;
+                        case SDLK_S: if (cmd) a = scrible::Action::Save; break;
+                        case SDLK_P: a = scrible::Action::Pen; break;
+                        case SDLK_H: a = scrible::Action::Highlighter; break;
+                        case SDLK_E: a = scrible::Action::Eraser; break;
+                        case SDLK_1: a = scrible::Action::SizeFine; break;
+                        case SDLK_2: a = scrible::Action::SizeMedium; break;
+                        case SDLK_3: a = scrible::Action::SizeThick; break;
+                        case SDLK_LEFT: a = scrible::Action::PrevPage; break;
+                        case SDLK_RIGHT: a = scrible::Action::NextPage; break;
+                        case SDLK_N: if (!cmd) a = scrible::Action::NewNotebook; break;
+                        case SDLK_RETURN: a = scrible::Action::Confirm; break;
+                        case SDLK_ESCAPE: a = scrible::Action::Exit; break;
                         default: break;
                     }
                     app.perform(a, now);
                     break;
                 }
-                case SDL_EVENT_WINDOW_EXPOSED: app.redrawAll(xs::Refresh::Content); break;
+                case SDL_EVENT_WINDOW_EXPOSED: app.redrawAll(scrible::Refresh::Content); break;
                 default: break;
             }
             got = SDL_PollEvent(&ev);

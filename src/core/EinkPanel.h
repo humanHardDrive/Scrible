@@ -11,7 +11,7 @@
 #include "Canvas.h"
 #include "Editor.h"
 
-namespace xs {
+namespace scrible {
 
 class EinkPanel {
 public:
@@ -25,4 +25,4 @@ private:
     Canvas shown_;      // what the panel shows
 };
 
-}  // namespace xs
+}  // namespace scrible

@@ -12,14 +12,14 @@
 
 #include <pugixml.hpp>
 
-#ifndef XS_VERSION
-#define XS_VERSION "dev"
+#ifndef SCRIBLE_VERSION
+#define SCRIBLE_VERSION "dev"
 #endif
 
-namespace xs {
+namespace scrible {
 namespace {
 
-constexpr const char* kCreator = "Xournal-Scribe " XS_VERSION;
+constexpr const char* kCreator = "Scrible " SCRIBLE_VERSION;
 
 void warn(std::vector<std::string>* warnings, std::string msg) {
     if (warnings) warnings->push_back(std::move(msg));
@@ -399,4 +399,4 @@ bool saveXopp(const std::string& path, const Document& doc, std::string& error) 
     return true;
 }
 
-}  // namespace xs
+}  // namespace scrible

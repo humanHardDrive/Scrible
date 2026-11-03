@@ -19,7 +19,7 @@
 #include "Renderer.h"
 #include "XoppFile.h"
 
-using namespace xs;
+using namespace scrible;
 
 namespace {
 
@@ -64,7 +64,7 @@ std::string tempPath(const std::string& name) {
     const char* dir = std::getenv("TMPDIR");
     std::string d = dir && *dir ? dir : "/tmp";
     if (d.back() != '/') d += '/';
-    return d + "xscribe-test-" + std::to_string(getpid()) + "-" + name;
+    return d + "scrible-test-" + std::to_string(getpid()) + "-" + name;
 }
 
 bool writeFile(const std::string& path, const std::string& data, bool gzip) {

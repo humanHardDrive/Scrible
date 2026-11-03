@@ -6,7 +6,7 @@
 #include "Canvas.h"
 #include "Document.h"
 
-namespace xs {
+namespace scrible {
 
 // Maps page coordinates (points) to screen pixels.
 struct PageTransform {
@@ -45,4 +45,4 @@ IRect drawLiveSegment(Canvas& c, const Stroke& s, size_t i, const PageTransform&
 
 uint8_t luminance(uint32_t rgb);
 
-}  // namespace xs
+}  // namespace scrible

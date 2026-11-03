@@ -3,7 +3,7 @@
 #include <map>
 #include <string>
 
-namespace xs {
+namespace scrible {
 
 // Preferences that survive restarts, kept as "key=value" lines in a small file.
 class Settings {
@@ -18,4 +18,4 @@ private:
     std::map<std::string, std::string> values_;
 };
 
-}  // namespace xs
+}  // namespace scrible

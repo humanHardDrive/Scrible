@@ -12,7 +12,7 @@
 
 #include "Geometry.h"
 
-namespace xs {
+namespace scrible {
 
 enum class StrokeTool { Pen, Highlighter, Eraser };  // Eraser: whiteout strokes from original Xournal
 
@@ -90,4 +90,4 @@ struct Document {
 
 Page makeBlankPage(double width, double height, const std::string& style);
 
-}  // namespace xs
+}  // namespace scrible

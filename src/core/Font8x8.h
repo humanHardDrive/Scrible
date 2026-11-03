@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-namespace xs {
+namespace scrible {
 
 constexpr uint8_t kFont8x8[95][8] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // space
@@ -105,4 +105,4 @@ constexpr uint8_t kFont8x8[95][8] = {
     {0x6e, 0x3b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // ~
 };
 
-}  // namespace xs
+}  // namespace scrible

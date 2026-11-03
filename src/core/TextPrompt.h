@@ -7,7 +7,7 @@
 #include "Editor.h"
 #include "Toolbar.h"
 
-namespace xs {
+namespace scrible {
 
 // Full-screen text entry with an on-screen keyboard, for naming notebooks.
 // Strictly black and white, so every keystroke can use the fast DU refresh.
@@ -52,4 +52,4 @@ private:
     std::vector<Damage> damage_;
 };
 
-}  // namespace xs
+}  // namespace scrible

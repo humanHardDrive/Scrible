@@ -13,7 +13,7 @@
 
 #include "Document.h"
 
-namespace xs {
+namespace scrible {
 
 bool loadXopp(const std::string& path, Document& doc, std::string& error,
               std::vector<std::string>* warnings = nullptr);
@@ -25,4 +25,4 @@ bool parseXopp(const std::string& xml, Document& doc, std::string& error,
 bool saveXopp(const std::string& path, const Document& doc, std::string& error);
 std::string serializeXopp(const Document& doc);
 
-}  // namespace xs
+}  // namespace scrible

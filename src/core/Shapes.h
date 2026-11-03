@@ -9,7 +9,7 @@
 
 #include "Document.h"
 
-namespace xs {
+namespace scrible {
 
 enum class ShapeKind { None, Line, Triangle, Quadrilateral, Rectangle, Circle, Ellipse, Arrow };
 
@@ -31,4 +31,4 @@ bool extendChain(std::vector<StrokePoint>& chain, StrokePoint a, StrokePoint b, 
 // A line followed by a "V" drawn at one of its ends becomes an arrow.
 bool makeArrow(StrokePoint lineA, StrokePoint lineB, const std::vector<StrokePoint>& head, Shape& arrow);
 
-}  // namespace xs
+}  // namespace scrible

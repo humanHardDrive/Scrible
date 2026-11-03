@@ -1,6 +1,6 @@
 #include "Document.h"
 
-namespace xs {
+namespace scrible {
 
 double Stroke::maxWidth() const {
     double w = width;
@@ -73,4 +73,4 @@ Page makeBlankPage(double width, double height, const std::string& style) {
     return p;
 }
 
-}  // namespace xs
+}  // namespace scrible

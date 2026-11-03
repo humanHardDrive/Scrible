@@ -4,7 +4,7 @@
 
 #include "Font8x8.h"
 
-namespace xs {
+namespace scrible {
 
 Canvas::Canvas(int width, int height, uint8_t fill)
     : w_(width), h_(height), px_(static_cast<size_t>(width) * height, fill) {}
@@ -38,4 +38,4 @@ void Canvas::drawText(int x, int y, const std::string& text, int scale, uint8_t 
     }
 }
 
-}  // namespace xs
+}  // namespace scrible

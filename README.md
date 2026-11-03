@@ -1,4 +1,4 @@
-# Xournal-Scribe
+# Scrible
 
 A handwriting notes app for jailbroken Kindle Scribes that reads and writes
 [Xournal++](https://xournalpp.github.io/) `.xopp` files, so notebooks move freely between
@@ -40,8 +40,8 @@ has been verified on the device.
 brew install cmake sdl3            # or your Linux distro's packages
 cmake -S . -B build
 cmake --build build -j
-./build/xscribe-tests              # unit tests
-./build/xscribe-desktop            # notebook list in ~/Documents/Xournal-Scribe
+./build/scrible-tests              # unit tests
+./build/scrible-desktop            # notebook list in ~/Documents/Scrible
 ```
 
 Pass a folder to list the notebooks in it, or a `.xopp` file to open just that one.
@@ -67,7 +67,7 @@ On x86_64 Linux with koxtoolchain's `kindlehf` toolchain in `~/x-tools`, run
 `scripts/build-kindle.sh` directly. Either way you get:
 
 - `dist/kindle-root/`, the files to copy onto the Kindle (also zipped), and
-- `dist/xournal-scribe_<version>_kindlehf.kpkg`, a [KPM](https://github.com/KindleModding/KPM)
+- `dist/scrible_<version>_kindlehf.kpkg`, a [KPM](https://github.com/KindleModding/KPM)
   package for publishing in a KPM repository.
 
 This needs a Kindle on firmware 5.16.3 or newer with a current jailbreak, i.e. the
@@ -76,16 +76,21 @@ KindleModding stack with scriptlet support. KUAL isn't used: it no longer works.
 ### Install and first run
 
 1. Connect the Kindle to your computer and copy the **contents** of `dist/kindle-root/`
-   onto it. That gives `xournal-scribe/` (the app; your notebooks go here too) and two
+   onto it. That gives `scrible/` (the app; your notebooks go here too) and two
    scriptlets in `documents/`. On a Mac, use an MTP app such as OpenMTP.
-2. Eject. Two new entries appear in the library. Open **Xournal-Scribe Input Test**,
+2. Eject. Two new entries appear in the library. Open **Scrible Input Test**,
    write near each corner and tap each corner with a finger. The marks should land under
    the pen tip and your finger. It ends by itself after 30 s. If the marks are off, see
    Troubleshooting below.
-3. Open **Xournal-Scribe**. It starts on the list of notebooks, which are the `.xopp` and
-   `.xoj` files in `xournal-scribe/notebooks/`. Copy files from desktop Xournal++ there to
-   open them on the Kindle. The log is `xournal-scribe/xscribe.log`. (A `notebook.xopp`
-   from version 0.1 is moved into `notebooks/` automatically.)
+3. Open **Scrible**. It starts on the list of notebooks, which are the `.xopp` and
+   `.xoj` files in `scrible/notebooks/`. Copy files from desktop Xournal++ there to
+   open them on the Kindle. The log is `scrible/scrible.log`.
+
+Upgrading from Xournal-Scribe, this app's old name: on the first start, Scrible moves the
+notebooks from `xournal-scribe/notebooks/` (or a version 0.1 `notebook.xopp`) into
+`scrible/notebooks/`, removes the old app and its two library entries, and deletes the
+`xournal-scribe` folder once it's empty. A notebook whose name is already taken in
+`scrible/notebooks/` is left where it was.
 
 KPM can't install a local `.kpkg` file, only packages from a repository. Until this
 project publishes one, use the copy method above. The package installs to the same
@@ -122,13 +127,13 @@ palm can rest on the page.
 ### Troubleshooting
 
 - **Marks land in the wrong place:** over SSH, run
-  `sh /mnt/us/xournal-scribe/run.sh --probe 30 --pen-transform swap`
+  `sh /mnt/us/scrible/run.sh --probe 30 --pen-transform swap`
   (combine `swap`, `flipx`, `flipy`) until they line up, then add the same flag to the
-  `xscribe` line in `run.sh`. Use `--touch-transform` for fingers.
+  `scrible` line in `run.sh`. Use `--touch-transform` for fingers.
 - **Ink lags or the screen flickers:** try `--no-pen-mode`.
 - **Stuck:** hold the power button until the Kindle restarts (up to ~40 s). Your notes
   are saved at most 30 s behind.
-- `xournal-scribe/bin/xscribe-tests` runs the unit tests on the device.
+- `scrible/bin/scrible-tests` runs the unit tests on the device.
 
 ## Layout
 
@@ -145,8 +150,15 @@ docs/          platform research notes
 
 ## Licensing
 
-The source in this repository is public domain (see [LICENSE](LICENSE)). The Kindle binary
-statically links FBInk, which is GPL-3.0-or-later, so **the distributed Kindle build is
-GPL-3.0-or-later**. The build script puts a NOTICE and FBInk's license in the package.
-Nothing here is copied from Xournal++ (GPL-2.0-or-later); only its file format is
-implemented.
+Copyright (C) 2026 Sam Stratter. Scrible is free software, licensed under the GNU General
+Public License version 3 or (at your option) any later version; see [LICENSE](LICENSE).
+GPL-3.0-or-later is what FBInk, which the Kindle app links statically, requires; the other
+components (pugixml, zlib, font8x8, SDL3) are all GPL-compatible. They're listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+`scripts/build-kindle.sh` puts the license, a NOTICE and the third-party license texts in
+the package, and writes `dist/scrible-<version>-source.tar.gz` next to it. If you share a
+build, share that source archive with it (or point to a public copy of this repository by
+setting `SCRIBLE_SOURCE_URL` or a git remote, and the NOTICE will name it).
+
+Scrible contains no Xournal++ code; it implements Xournal++'s file format.

@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 constexpr double kMinPieceLength = 0.01;  // points; shorter leftovers are rounding noise
@@ -108,4 +108,4 @@ bool eraseFromStroke(const Stroke& s, const StrokePoint& from, const StrokePoint
     return true;
 }
 
-}  // namespace xs
+}  // namespace scrible

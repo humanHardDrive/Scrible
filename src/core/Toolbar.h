@@ -6,7 +6,7 @@
 
 #include "Canvas.h"
 
-namespace xs {
+namespace scrible {
 
 enum class Action {
     None,
@@ -61,4 +61,4 @@ private:
     IRect textSlot_;
 };
 
-}  // namespace xs
+}  // namespace scrible

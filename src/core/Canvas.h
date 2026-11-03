@@ -6,7 +6,7 @@
 
 #include "Geometry.h"
 
-namespace xs {
+namespace scrible {
 
 // 8-bit grayscale image (0 = black, 255 = white), the same pixel format as the
 // Kindle's framebuffer, so presenting a region is a plain copy.
@@ -37,4 +37,4 @@ private:
     std::vector<uint8_t> px_;
 };
 
-}  // namespace xs
+}  // namespace scrible

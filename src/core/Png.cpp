@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 void put32(std::string& out, uint32_t v) {
@@ -66,4 +66,4 @@ bool writePng(const std::string& path, const Canvas& c, std::string& error) {
     return true;
 }
 
-}  // namespace xs
+}  // namespace scrible

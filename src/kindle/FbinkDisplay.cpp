@@ -5,7 +5,7 @@
 
 #include "fbink.h"
 
-namespace xs {
+namespace scrible {
 
 struct FbinkDisplay::State {
     int fd = -1;
@@ -25,11 +25,11 @@ bool FbinkDisplay::open(const DisplayOptions& opts) {
     s_->opts = opts;
     s_->fd = fbink_open();
     if (s_->fd < 0) {
-        std::fprintf(stderr, "xscribe: can't open the framebuffer\n");
+        std::fprintf(stderr, "scrible: can't open the framebuffer\n");
         return false;
     }
     if (fbink_init(s_->fd, &s_->cfg) < 0) {
-        std::fprintf(stderr, "xscribe: FBInk initialization failed\n");
+        std::fprintf(stderr, "scrible: FBInk initialization failed\n");
         close();
         return false;
     }
@@ -83,7 +83,7 @@ void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
             if (fbink_mtk_toggle_pen_mode(s_->fd, true) >= 0) {
                 s_->penModeOn = true;
             } else {
-                std::fprintf(stderr, "xscribe: pen mode unavailable on this device, using plain DU\n");
+                std::fprintf(stderr, "scrible: pen mode unavailable on this device, using plain DU\n");
                 s_->penModeWorks = false;
             }
         } else if (!fast && s_->penModeOn) {
@@ -97,7 +97,7 @@ void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
         for (int y = 0; y < h; ++y) std::copy_n(c.row(r.y0 + y) + r.x0, w, &s_->buf[static_cast<size_t>(y) * w]);
         if (fbink_print_raw_data(s_->fd, s_->buf.data(), w, h, s_->buf.size(), static_cast<short>(r.x0),
                                  static_cast<short>(r.y0), &s_->cfg) < 0) {
-            std::fprintf(stderr, "xscribe: fbink_print_raw_data failed\n");
+            std::fprintf(stderr, "scrible: fbink_print_raw_data failed\n");
             continue;
         }
 
@@ -119,4 +119,4 @@ void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
     }
 }
 
-}  // namespace xs
+}  // namespace scrible

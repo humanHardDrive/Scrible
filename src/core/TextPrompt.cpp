@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 constexpr int kMargin = 40;
@@ -209,4 +209,4 @@ IRect TextPrompt::keyRect(const std::string& label) const {
     return {};
 }
 
-}  // namespace xs
+}  // namespace scrible

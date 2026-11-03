@@ -38,7 +38,7 @@ The numbering differs from [koreader#11156](https://github.com/koreader/koreader
 - Pen protocol is Wacom-style: BTN_TOOL_PEN (hover), BTN_TOOL_RUBBER (eraser end),
   BTN_TOUCH (contact), BTN_STYLUS/BTN_STYLUS2 (side buttons).
 
-Use the "Xournal-Scribe Input Test" library entry to re-check orientation; fix it with
+Use the "Scrible Input Test" library entry to re-check orientation; fix it with
 `--pen-transform` / `--touch-transform` if needed.
 
 ## Display
@@ -95,7 +95,7 @@ their own scriptlets. `kpm launch <id>` runs `launch.sh`. The CLI installs only 
 repositories (`;kpm add-repo URL`, then `;kpm install <id>`), not from local files.
 
 We copy KOReader's KPM package layout. `install.sh` puts the app in a user-visible folder
-(`/mnt/us/xournal-scribe`, like `/mnt/us/koreader`) and copies the scriptlets. Our
+(`/mnt/us/scrible`, like `/mnt/us/koreader`) and copies the scriptlets. Our
 scriptlets call `run.sh` there directly instead of `kpm launch`, so copying the files over
 USB works the same as a KPM install.
 

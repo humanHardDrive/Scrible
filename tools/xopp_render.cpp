@@ -28,10 +28,10 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    xs::Document doc;
+    scrible::Document doc;
     std::string error;
     std::vector<std::string> warnings;
-    if (!xs::loadXopp(in, doc, error, &warnings)) {
+    if (!scrible::loadXopp(in, doc, error, &warnings)) {
         std::fprintf(stderr, "%s: %s\n", in.c_str(), error.c_str());
         return 1;
     }
@@ -41,20 +41,20 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const xs::Page& p = doc.pages[page - 1];
+    const scrible::Page& p = doc.pages[page - 1];
     const double scale = dpi / 72.0;
-    xs::Canvas canvas(static_cast<int>(p.width * scale + 0.5), static_cast<int>(p.height * scale + 0.5));
-    xs::PageTransform t;
+    scrible::Canvas canvas(static_cast<int>(p.width * scale + 0.5), static_cast<int>(p.height * scale + 0.5));
+    scrible::PageTransform t;
     t.scale = scale;
-    xs::drawPage(canvas, p, t, canvas.rect());
-    if (!xs::writePng(out, canvas, error)) {
+    scrible::drawPage(canvas, p, t, canvas.rect());
+    if (!scrible::writePng(out, canvas, error)) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
 
     size_t strokes = 0, other = 0;
     for (const auto& layer : p.layers)
-        for (const auto& e : layer.elements) (std::holds_alternative<xs::Stroke>(e) ? strokes : other)++;
+        for (const auto& e : layer.elements) (std::holds_alternative<scrible::Stroke>(e) ? strokes : other)++;
     std::printf("page %d/%zu: %.0fx%.0f pt, %zu layer(s), %zu stroke(s), %zu other element(s) -> %s\n", page,
                 doc.pages.size(), p.width, p.height, p.layers.size(), strokes, other, out.c_str());
     return 0;

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 template <typename T>
@@ -91,4 +91,4 @@ IRect Toolbar::buttonRect(Action a) const {
     return {};
 }
 
-}  // namespace xs
+}  // namespace scrible

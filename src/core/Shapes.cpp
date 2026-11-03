@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace xs {
+namespace scrible {
 namespace {
 
 using P = StrokePoint;
@@ -358,4 +358,4 @@ bool makeArrow(StrokePoint lineA, StrokePoint lineB, const std::vector<StrokePoi
     return true;
 }
 
-}  // namespace xs
+}  // namespace scrible

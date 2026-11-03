@@ -12,7 +12,7 @@
 #include "Library.h"
 #include "Settings.h"
 
-namespace xs {
+namespace scrible {
 
 struct AppOptions {
     EditorOptions editor;
@@ -72,4 +72,4 @@ private:
     int deferredTicks_ = 0;
 };
 
-}  // namespace xs
+}  // namespace scrible

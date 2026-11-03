@@ -6,7 +6,7 @@
 #include "Shapes.h"
 #include "XoppFile.h"
 
-namespace xs {
+namespace scrible {
 namespace {
 
 constexpr uint8_t kOffPageGray = 220;
@@ -446,7 +446,7 @@ void Editor::addPage(uint64_t now) {
 bool Editor::save(uint64_t now, bool quiet) {
     std::string error;
     if (!saveXopp(path_, doc_, error)) {
-        std::fprintf(stderr, "xscribe: saving %s failed: %s\n", path_.c_str(), error.c_str());
+        std::fprintf(stderr, "scrible: saving %s failed: %s\n", path_.c_str(), error.c_str());
         setStatus("FAILED", now, 3000);
         return false;
     }
@@ -597,4 +597,4 @@ int Editor::msUntilIdleWork(uint64_t now) const {
     return next <= now ? 0 : static_cast<int>(std::min<uint64_t>(next - now, 1u << 30));
 }
 
-}  // namespace xs
+}  // namespace scrible

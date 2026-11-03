@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE=xournal-scribe-kindle
+IMAGE=scrible-kindle
 
 docker build --platform linux/amd64 -t "$IMAGE" -f "$ROOT/docker/kindle.Dockerfile" "$ROOT/docker"
 docker run --rm --platform linux/amd64 -v "$ROOT:/src" -w /src "$IMAGE" scripts/build-kindle.sh

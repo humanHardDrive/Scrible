@@ -14,6 +14,6 @@ RUN curl -fsSL -o /tmp/kindlehf.tar.zst \
     && tar --zstd -xf /tmp/kindlehf.tar.zst -C /opt \
     && rm /tmp/kindlehf.tar.zst
 
-ENV XS_KINDLE_TC=/opt/x-tools/arm-kindlehf-linux-gnueabihf
+ENV SCRIBLE_KINDLE_TC=/opt/x-tools/arm-kindlehf-linux-gnueabihf
 # The source tree is bind-mounted and owned by the host user.
 RUN git config --global --add safe.directory '*'

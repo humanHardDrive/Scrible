@@ -6,7 +6,7 @@
 
 #include "Editor.h"
 
-namespace xs {
+namespace scrible {
 
 struct DisplayOptions {
     bool penMode = true;   // MTK "pen mode": low-latency DU updates for inking (Scribe 1st/2nd gen)
@@ -41,4 +41,4 @@ private:
     std::unique_ptr<State> s_;  // keeps fbink.h (and its `restrict` macro) out of this header
 };
 
-}  // namespace xs
+}  // namespace scrible

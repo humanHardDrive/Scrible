@@ -13,7 +13,7 @@
 #include "TextPrompt.h"
 #include "Toolbar.h"
 
-namespace xs {
+namespace scrible {
 
 struct NotebookInfo {
     std::string path;
@@ -124,4 +124,4 @@ private:
     std::vector<Damage> damage_;
 };
 
-}  // namespace xs
+}  // namespace scrible

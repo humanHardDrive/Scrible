@@ -15,7 +15,7 @@
 #include "Renderer.h"
 #include "Toolbar.h"
 
-namespace xs {
+namespace scrible {
 
 // How a changed region should be pushed to the e-ink panel.
 // DU only draws pure black and white: a pixel whose new value is gray keeps
@@ -182,4 +182,4 @@ private:
     std::vector<Damage> damage_;
 };
 
-}  // namespace xs
+}  // namespace scrible
