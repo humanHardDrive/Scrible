@@ -18,6 +18,7 @@
 #include "Editor.h"
 #include "EinkPanel.h"
 #include "Eraser.h"
+#include "Font.h"
 #include "Lasso.h"
 #include "Paper.h"
 #include "Shapes.h"
@@ -203,8 +204,11 @@ TEST(parses_fileversion5_text) {
     CHECK_NEAR(t.textX, 30, 1e-9);
     CHECK_NEAR(t.textSize, 20, 1e-9);
     CHECK(t.color == 0xff0000);
-    CHECK(textLines(t) == (std::vector<std::string>{"one", "two", "three"}));
-    CHECK_NEAR(t.bounds.x1, 30 + 5 * 20, 1e-9);
+    // Wrapped to a word a line, as wide as the widest, "three".
+    const auto lines = Font::sans().layout(t.text, t.textSize, t.textWrap);
+    CHECK(lines.size() == 3 && t.text.substr(lines[2].begin, lines[2].end - lines[2].begin) == "three");
+    CHECK_NEAR(t.bounds.x1, 30 + lines[2].width, 1e-9);
+    CHECK(lines[2].width > lines[0].width && lines[2].width < 45 + 20);
     CHECK(serializeXopp(d).find("fileversion=\"5\"") != std::string::npos);  // never downgraded
 }
 
@@ -2944,6 +2948,194 @@ TEST(selections_and_answers_stay_on_the_page) {
     const RectF b = bounds();
     CHECK(b.x1 <= page.width + 1e-6 && b.y1 <= page.height + 1e-6);
     CHECK(b.x1 > page.width - 1 || b.y1 > page.height - 1);
+}
+
+// ---- typing with the TEXT tool ----
+
+namespace {
+
+// An editor as on the Kindle (no antialiasing), seen through the e-ink model.
+struct TypingRig {
+    EditorOptions opts = [] {
+        EditorOptions o;
+        o.render.antialias = false;
+        return o;
+    }();
+    Editor e;
+    EinkPanel panel;
+    uint64_t t = 1000;
+    explicit TypingRig(const std::string& name, Document doc = Document{})
+        : e(1200, 1600, std::move(doc), tempPath(name), opts), panel(1200, 1600) {
+        flush();
+    }
+    void flush() {
+        for (const Damage& d : e.takeDamage()) panel.refresh(e.canvas(), d);
+    }
+    void settle() {
+        e.onIdle(t += 5000);
+        flush();
+    }
+    void pen(int x, int y, bool eraser = false) {
+        e.penDown({double(x), double(y), 0.5, eraser}, t += 10);
+        e.penUp(t += 10);
+        flush();
+    }
+    bool key(const std::string& label) {  // a finger on the keyboard
+        const IRect r = e.keyboard().keyRect(label);
+        if (r.empty()) return false;
+        const IRect c = center(r);
+        e.touchDown(c.x0, c.y0, t += 10);
+        flush();
+        e.onIdle(t += 300);  // the key's flash ends
+        flush();
+        return true;
+    }
+    const std::vector<Element>& els() const { return e.document().pages[0].layers.back().elements; }
+    const ForeignElement& text(size_t i) const { return std::get<ForeignElement>(els().at(i)); }
+};
+
+}  // namespace
+
+TEST(text_tool_types_on_the_page) {
+    TypingRig r("typing.xopp");
+    Editor& e = r.e;
+    e.perform(Action::Text, r.t += 10);
+    CHECK(e.tool() == ToolKind::Text);
+    r.pen(300, 500);
+    CHECK(e.typing() && e.keyboard().open() && !e.keyboard().atTop());
+    CHECK(r.els().size() == 1 && r.text(0).text.empty());
+    // The first letter is a capital; then SHIFT lets go.
+    CHECK(e.keyboard().shift());
+    for (const char* k : {"H", "i", "SPACE", "?123", "!", "ABC"}) CHECK(r.key(k));
+    CHECK(r.text(0).text == "Hi !" && e.caret() == 4);
+    CHECK(r.key("DEL") && r.text(0).text == "Hi ");
+    CHECK(r.key("ENTER") && r.key("y") && r.text(0).text == "Hi \ny");
+    // Typed text is the size the tool says, its first line level with where the pen came down.
+    const ForeignElement& f = r.text(0);
+    CHECK_NEAR(f.textSize, 14, 1e-9);
+    const IRect where = xf(e, f.bounds);
+    CHECK(where.x0 >= 298 && where.x0 <= 302 && where.y0 < 500 && where.y0 > 450);
+    // Keys show they were pressed, and everything on the screen is as drawn once typing pauses.
+    r.settle();
+    CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+
+    // DONE: one undo step for all of it, and the keyboard goes.
+    CHECK(r.key("DONE"));
+    CHECK(!e.typing() && !e.keyboard().open());
+    r.settle();
+    CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+    e.perform(Action::Undo, r.t += 10);
+    CHECK(r.els().empty());
+    e.perform(Action::Redo, r.t += 10);
+    CHECK(r.els().size() == 1 && r.text(0).text == "Hi \ny");
+
+    // It's saved as an ordinary Xournal++ text.
+    CHECK(e.save(r.t += 10));
+    Document d;
+    std::string err;
+    CHECK(loadXopp(e.path(), d, err));
+    const auto& back = std::get<ForeignElement>(d.pages[0].layers.back().elements.at(0));
+    CHECK(back.tag == "text" && back.text == "Hi \ny" && back.xml.find("font=\"Sans\"") != std::string::npos);
+    std::remove(e.path().c_str());
+}
+
+TEST(text_tool_edits_texts_from_xournalpp) {
+    const char* xml = R"(<xournal fileversion="4"><page width="400" height="500"><layer>
+<text font="Serif" size="12" x="40" y="60" color="#ff0000ff" ts="1">Shopping list</text>
+</layer></page></xournal>)";
+    Document doc;
+    std::string err;
+    CHECK(parseXopp(xml, doc, err));
+    TypingRig r("edit-text.xopp", doc);
+    Editor& e = r.e;
+    e.perform(Action::Text, r.t += 10);
+    // Tapped at its end: the caret goes there.
+    const IRect b = xf(e, r.text(0).bounds);
+    r.pen(b.x1 - 2, (b.y0 + b.y1) / 2);
+    CHECK(e.typing() && e.typedText() == 0 && e.caret() == std::string("Shopping list").size());
+    CHECK(r.key("SPACE") && r.key("2"));
+    CHECK(r.text(0).text == "Shopping list 2");
+    // Its own font, color and other attributes stay; the size is still its own.
+    CHECK(r.text(0).color == 0xff0000 && r.text(0).textSize == 12);
+    CHECK(r.text(0).xml.find("font=\"Serif\"") != std::string::npos && r.text(0).xml.find("ts=\"1\"") != std::string::npos);
+    // Tapped at its start, then typed there.
+    r.pen(b.x0 + 1, (b.y0 + b.y1) / 2);
+    CHECK(e.caret() == 0);
+    e.type("My ", r.t += 10);
+    CHECK(r.text(0).text == "My Shopping list 2");
+    // Tapping elsewhere is done with it (with TEXT, it starts another there, empty). Low
+    // on the page, the keyboard is in the way until DONE.
+    r.pen(600, 1300);
+    CHECK(e.typing() && e.typedText() == 0 && r.els().size() == 1);
+    CHECK(r.key("DONE") && !e.typing());
+    r.pen(600, 1300);
+    CHECK(e.typing() && e.typedText() == 1);
+    CHECK(e.keyboard().open() && e.keyboard().atTop());  // so it doesn't hide the line low on the page
+    CHECK(e.caretRect().y0 > e.keyboard().rect().y1);
+    e.perform(Action::Undo, r.t += 10);  // done with the empty one, which leaves no trace
+    CHECK(!e.typing() && r.els().size() == 1 && r.text(0).text == "Shopping list");
+    r.settle();
+    CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+
+    // Deleting all of a text removes it, as one undo step.
+    r.pen(b.x1 - 2, (b.y0 + b.y1) / 2);
+    for (int i = 0; i < 13; ++i) e.type("\b", r.t += 10);
+    CHECK(r.text(0).text.empty());
+    e.perform(Action::Confirm, r.t += 10);
+    CHECK(r.els().empty());
+    e.perform(Action::Undo, r.t += 10);
+    CHECK(r.els().size() == 1 && r.text(0).text == "Shopping list");
+}
+
+TEST(typing_breaks_lines_at_the_page_edge_and_takes_any_size) {
+    TypingRig r("wrap.xopp");
+    Editor& e = r.e;
+    e.perform(Action::Text, r.t += 10);
+    r.pen(200, 400);
+    const std::string words = "the quick brown fox jumps over the lazy dog and keeps running";
+    for (char c : words) e.type(std::string(1, c), r.t += 10);
+    CHECK(!e.keyboard().shift());  // the capital it offered was used up
+    const ForeignElement& f = r.text(0);
+    const Page& page = e.document().pages[0];
+    CHECK(f.text.find('\n') != std::string::npos);
+    CHECK(f.bounds.x1 <= page.width);
+    std::string joined = f.text;
+    for (char& c : joined) c = c == '\n' ? ' ' : c;
+    CHECK(joined == words);  // only spaces became line breaks
+    CHECK(e.caret() == f.text.size());
+
+    // Characters beyond ASCII, deleted whole.
+    e.type("\xc3\xa9", r.t += 10);  // é
+    CHECK(r.text(0).text.size() == words.size() + 2);
+    e.type("\b", r.t += 10);
+    CHECK(r.text(0).text.size() == words.size());
+
+    // A size from the panel goes for the text being typed.
+    e.perform(Action::Tools, r.t += 10);
+    e.perform(Action::Text, r.t += 10);
+    CHECK(e.toolPanel().options() == Action::Text && e.typing());
+    e.perform(Action::SizeThick, r.t += 10);
+    CHECK(e.typing() && r.text(0).textSize == 20 && e.toolSize(ToolKind::Text) == ToolSize::Thick);
+    // Any other tool is done with it.
+    e.perform(Action::Pen, r.t += 10);
+    CHECK(!e.typing() && !e.keyboard().open() && r.els().size() == 1);
+    r.settle();
+    CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+}
+
+TEST(the_eraser_removes_typed_text) {
+    TypingRig r("erase-text.xopp");
+    Editor& e = r.e;
+    e.perform(Action::Text, r.t += 10);
+    r.pen(300, 500);
+    e.type("Gone soon", r.t += 10);
+    e.perform(Action::Eraser, r.t += 10);
+    CHECK(!e.typing() && r.els().size() == 1);
+    const IRect b = center(xf(e, r.text(0).bounds));
+    drawLine(e, b.x0 - 5, b.x0 + 5, b.y0, r.t);
+    CHECK(r.els().empty());
+    e.perform(Action::Undo, r.t += 10);
+    CHECK(r.els().size() == 1 && r.text(0).text == "Gone soon");
 }
 
 int main() {

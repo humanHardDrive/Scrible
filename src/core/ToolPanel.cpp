@@ -5,6 +5,7 @@
 #include <iterator>
 #include <string>
 
+#include "Font.h"
 #include "Widgets.h"
 
 namespace scrible {
@@ -17,7 +18,8 @@ constexpr int kAside = 12;  // between the column and the options
 constexpr int kArrow = 16;        // the tab's arrow (twice as tall), and the space either side of it
 constexpr int kArrowPad = 28;
 
-constexpr Action kColumn[] = {Action::Pen, Action::Shapes, Action::Lasso, Action::Highlighter, Action::Eraser, Action::Pan};
+constexpr Action kColumn[] = {Action::Pen,    Action::Shapes, Action::Lasso, Action::Highlighter,
+                             Action::Eraser, Action::Text,   Action::Pan};
 constexpr Action kSizes[] = {Action::SizeFine, Action::SizeMedium, Action::SizeThick};
 
 const char* label(Action a) {
@@ -27,6 +29,7 @@ const char* label(Action a) {
         case Action::Lasso: return "SELECT";
         case Action::Highlighter: return "MARK";
         case Action::Eraser: return "ERASE";
+        case Action::Text: return "TEXT";
         case Action::Pan: return "PAN";
         case Action::ZoomFit: return "FIT";
         case Action::ErasePartial: return "PARTIAL";
@@ -143,7 +146,16 @@ void ToolPanel::draw(Canvas& c, const ToolPanelState& s, const IRect& clip) cons
         box(b.r, on);
         const uint8_t ink = on ? 255 : 0;
 
-        if (size != std::end(kSizes)) {
+        if (size != std::end(kSizes) && s.tool == Action::Text) {
+            // A sample of the text, as big as on the page (within reason).
+            const Font& font = Font::sans();
+            const double px = std::clamp(s.widthsPx[static_cast<size_t>(size - std::begin(kSizes))], 16.0,
+                                         (b.r.height() - 12) / font.lineHeight());
+            const std::string sample = "Aa";
+            const double w = font.advance(sample, 0, sample.size()) * px;
+            font.draw(c, b.r.x0 + (b.r.width() - w) / 2, b.r.y0 + (b.r.height() - font.lineHeight() * px) / 2, sample, 0,
+                      sample.size(), px, ink, b.r.intersected(clip), false);
+        } else if (size != std::end(kSizes)) {
             // A sample of the line it draws, as thick as on the page (within reason).
             const double px = s.widthsPx[static_cast<size_t>(size - std::begin(kSizes))];
             const int t = std::clamp(static_cast<int>(std::lround(px)), 2, b.r.height() - 2 * kTextPad);

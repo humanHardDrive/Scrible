@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "Eraser.h"
+#include "Font.h"
 #include "Lasso.h"
 #include "Shapes.h"
 #include "XoppFile.h"
@@ -39,6 +40,8 @@ constexpr int kInfoGap = 8, kInfoSize = 44;  // a math answer's i: this far righ
 constexpr double kPenWidths[] = {0.85, 1.41, 2.26};
 constexpr double kHighlighterWidths[] = {2.83, 8.50, 19.84};
 constexpr double kEraserWidths[] = {2.83, 8.50, 19.84};
+constexpr double kTextSizes[] = {10, 14, 20};  // points, like Xournal++'s font sizes
+constexpr double kTextEdge = 5;                // points kept clear at the page's right edge while typing
 
 // The drawing tools are in the panel along the left edge (ToolPanel). The notebook's
 // name fills the room between UNDO / REDO and the page controls.
@@ -72,6 +75,19 @@ bool sweepTouches(const RectF& box, const StrokePoint& a, const StrokePoint& b, 
     return false;
 }
 
+// A dashed outline just inside `r`, black and white, like the selection's frame.
+void dashedFrame(Canvas& c, const IRect& f, const IRect& clip) {
+    auto fill = [&](const IRect& r) { c.fill(r.intersected(clip), 0); };
+    for (int x = f.x0; x < f.x1; x += 24) {
+        fill({x, f.y0, std::min(x + 14, f.x1), f.y0 + 3});
+        fill({x, f.y1 - 3, std::min(x + 14, f.x1), f.y1});
+    }
+    for (int y = f.y0; y < f.y1; y += 24) {
+        fill({f.x0, y, f.x0 + 3, std::min(y + 14, f.y1)});
+        fill({f.x1 - 3, y, f.x1, std::min(y + 14, f.y1)});
+    }
+}
+
 constexpr uint32_t kPenColor = 0x000000;
 constexpr uint32_t kHighlighterColor = 0xffff00;  // e-ink shows gray; the desktop shows yellow
 
@@ -85,6 +101,7 @@ Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path
       panel_(pageArea_),
       paperMenu_(toolbar_.buttonRect(Action::PageStyle), pageArea_),
       math_(pageArea_),
+      keyboard_(screenWidth, screenHeight, panel_.tabRect().y1 + 12),  // at the top, clear of the tools tab
       doc_(std::move(doc)),
       path_(std::move(path)),
       sizes_(opts_.sizes),
@@ -210,14 +227,17 @@ void Editor::endFlash() {
 }
 
 ToolPanelState Editor::panelState() const {
-    static constexpr Action tools[] = {Action::Pen, Action::Highlighter, Action::Eraser, Action::Lasso, Action::Pan};
+    static constexpr Action tools[] = {Action::Pen,  Action::Highlighter, Action::Eraser,
+                                       Action::Text, Action::Lasso,       Action::Pan};
     ToolPanelState s;
     s.tool = tools[static_cast<int>(tool_)];
     s.shapes = shapes_;
     s.eraseWhole = eraseWhole_;
     if (tool_ != ToolKind::Lasso && tool_ != ToolKind::Pan) {
+        // For TEXT, the font sizes.
         const double* widths = tool_ == ToolKind::Pen           ? kPenWidths
                                : tool_ == ToolKind::Highlighter ? kHighlighterWidths
+                               : tool_ == ToolKind::Text        ? kTextSizes
                                                                 : kEraserWidths;
         s.size = toolSize(tool_);
         for (size_t i = 0; i < 3; ++i) s.widthsPx[i] = widths[i] * xf_.scale;
@@ -243,10 +263,13 @@ void Editor::repaint(const IRect& r, Refresh mode) {
     damage_.push_back({area, mode});
 }
 
-// What goes over the page: the selection's frame and buttons, the tools panel, the paper menu.
+// What goes over the page: the selection's frame and buttons, the text being typed
+// and the keyboard, the tools panel, the paper menu.
 void Editor::drawChrome(const IRect& clip) {
     if (sel_.active) drawOverlay(clip);
     drawAnswerButtons(clip);
+    drawTextEdit(clip);
+    keyboard_.draw(canvas_, clip);
     panel_.draw(canvas_, panelState(), clip);
     paperMenu_.draw(canvas_, clip);
     math_.draw(canvas_, clip);
@@ -433,6 +456,10 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         press(panel_.covers(x, y) ? panel_.hit(x, y) : paperMenu_.hit(x, y), now);
         return;
     }
+    if (keyboard_.covers(x, y)) {
+        gesture_ = Gesture::Toolbar;
+        return keyPress(x, y, now);
+    }
     if (math_.open()) {  // its buttons, or a tap elsewhere closes it (and draws nothing)
         gesture_ = Gesture::Toolbar;
         if (math_.covers(x, y)) mathTap(x, y, now);
@@ -443,9 +470,24 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
         viewGesture_ = ViewGesture::None;
         endViewGesture(now);
     }
+    const bool erasing = s.eraser || (tool_ == ToolKind::Eraser && !s.button);
+    // While typing, the pen puts the caret in the text; elsewhere it's done with it,
+    // and with the TEXT tool starts another (the keyboard stays up).
+    if (text_.active) {
+        if (!erasing && textFrame().contains(x, y)) {
+            gesture_ = Gesture::Toolbar;
+            return caretTo(x, y, now);
+        }
+        bool another = tool_ == ToolKind::Text && !s.button && !erasing && drawingClip().contains(x, y);
+        for (size_t i : answers()) another = another && !answerArea(i).grown(8).contains(x, y);
+        finishText(now, another);
+        if (another) {
+            gesture_ = Gesture::Toolbar;
+            return startText(x, y, now);
+        }
+    }
     // A math answer: its i shows what's behind it; anywhere else on it, the pen drags
     // it (the eraser erases it).
-    const bool erasing = s.eraser || (tool_ == ToolKind::Eraser && !s.button);
     for (size_t i : answers()) {
         if (answerInfoButton(i).grown(8).contains(x, y)) {
             gesture_ = Gesture::Toolbar;
@@ -485,6 +527,10 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
     }
     if (!drawingClip().contains(x, y)) return;
 
+    if (tool_ == ToolKind::Text && !s.eraser && !s.button) {
+        gesture_ = Gesture::Toolbar;
+        return startText(x, y, now);
+    }
     if (tool_ == ToolKind::Lasso && !s.eraser && !s.button) {
         gesture_ = Gesture::Lasso;
         lasso_ = {{xf_.toPageX(s.x), xf_.toPageY(s.y)}};
@@ -595,6 +641,8 @@ void Editor::touchDown(int id, int x, int y, uint64_t now) {
         if (toolbar_.rect().contains(x, y)) return press(toolbarHit(x, y), now);
         if (panel_.covers(x, y)) return press(panel_.hit(x, y), now);
         if (paperMenu_.covers(x, y)) return press(paperMenu_.hit(x, y), now);
+        if (keyboard_.covers(x, y)) return keyPress(x, y, now);
+        if (text_.active && textFrame().contains(x, y)) return caretTo(x, y, now);
         if (math_.open()) return math_.covers(x, y) ? mathTap(x, y, now) : closeMath();
         for (size_t i : answers())
             if (answerInfoButton(i).grown(8).contains(x, y)) return openAnswer(i);
@@ -877,13 +925,13 @@ void Editor::eraseAt(const PenSample& s, uint64_t now) {
     IRect screen;  // also changing: the i of answers that go
     std::vector<Stroke> pieces;
     for (size_t i = 0; i < elements.size();) {
-        // A math answer goes as a whole as soon as the eraser touches it.
-        if (const auto* f = std::get_if<ForeignElement>(&elements[i]); f && !f->mathOp.empty()) {
+        // A typed text, or a math answer, goes as a whole as soon as the eraser touches it.
+        if (const auto* f = std::get_if<ForeignElement>(&elements[i]); f && f->tag == "text") {
             if (pendingErase_.layer + 1 != currentPage().layers.size() || !sweepTouches(f->bounds, from, to, r)) {
                 ++i;
                 continue;
             }
-            screen = screen.united(answerArea(i));
+            screen = screen.united(f->mathOp.empty() ? xf_.toScreen(f->bounds).grown(2) : answerArea(i));
             pendingErase_.edits.push_back({false, i, std::move(elements[i])});
             elements.erase(elements.begin() + static_cast<std::ptrdiff_t>(i));
             continue;
@@ -1107,8 +1155,8 @@ void Editor::openMath(Action op, uint64_t now) {
         }
     }
     std::sort(heights.begin(), heights.end());
-    // A little smaller than the writing: the bitmap font is heavy.
-    const double size = std::clamp(heights.empty() ? 10.0 : 0.8 * heights[heights.size() / 2], 6.0, 60.0);
+    // Its digits (0.73 em tall) a little smaller than the written ones.
+    const double size = std::clamp(heights.empty() ? 10.0 : 0.95 * heights[heights.size() / 2], 6.0, 60.0);
     const Page& page = currentPage();
     ForeignElement answer =
         answerElement(MathPopup::opKey(op), texts, text, sel_.bounds.x0, sel_.bounds.y1 + 0.4 * size, size);
@@ -1271,16 +1319,8 @@ IRect Editor::overlayArea() const {
 // The selection's dashed frame, resize handle and buttons: black and white only, so
 // they can appear with DU.
 void Editor::drawOverlay(const IRect& clip) {
-    const IRect f = selectionFrame();
     auto fill = [&](const IRect& r, uint8_t v) { canvas_.fill(r.intersected(clip), v); };
-    for (int x = f.x0; x < f.x1; x += 24) {
-        fill({x, f.y0, std::min(x + 14, f.x1), f.y0 + 3}, 0);
-        fill({x, f.y1 - 3, std::min(x + 14, f.x1), f.y1}, 0);
-    }
-    for (int y = f.y0; y < f.y1; y += 24) {
-        fill({f.x0, y, f.x0 + 3, std::min(y + 14, f.y1)}, 0);
-        fill({f.x1 - 3, y, f.x1, std::min(y + 14, f.y1)}, 0);
-    }
+    dashedFrame(canvas_, selectionFrame(), clip);
     const IRect h = selectionHandle();
     fill(h, 0);
     fill(h.grown(-8), 255);
@@ -1413,9 +1453,210 @@ void Editor::duplicateSelection(uint64_t now) {
     repaint(before.united(overlayArea()), Refresh::Content);
 }
 
+// ---- typing ----
+
+double Editor::textSize() const { return kTextSizes[static_cast<size_t>(toolSize(ToolKind::Text))]; }
+
+const ForeignElement& Editor::typed() const {
+    return std::get<ForeignElement>(doc_.pages[page_].layers.back().elements[text_.index]);
+}
+
+int Editor::textAt(int x, int y) const {
+    const Page& p = doc_.pages[page_];
+    if (p.layers.empty()) return -1;
+    const auto& els = p.layers.back().elements;
+    for (size_t i = els.size(); i-- > 0;) {  // the topmost
+        const auto* f = std::get_if<ForeignElement>(&els[i]);
+        if (f && f->tag == "text" && f->mathOp.empty() && xf_.toScreen(f->bounds).grown(12).contains(x, y))
+            return static_cast<int>(i);
+    }
+    return -1;
+}
+
+// On a text, the caret goes where the pen is in it; elsewhere a new one starts, its
+// first line level with the pen.
+void Editor::startText(int x, int y, uint64_t now) {
+    (void)now;
+    const size_t layer = currentLayer();
+    auto& els = currentPage().layers[layer].elements;
+    const int hit = textAt(x, y);
+    text_ = TextEdit{};
+    text_.active = true;
+    if (hit >= 0) {
+        text_.index = static_cast<size_t>(hit);
+        text_.before = els[text_.index];
+        const ForeignElement& f = typed();
+        text_.caret =
+            Font::sans().offsetAt(f.text, f.textSize, f.textWrap, xf_.toPageX(x) - f.textX, xf_.toPageY(y) - f.textY);
+    } else {
+        const Page& page = currentPage();
+        const double size = textSize(), line = Font::sans().lineHeight() * size;
+        const double tx = std::clamp(xf_.toPageX(x), 0.0, std::max(0.0, page.width - size));
+        const double ty = std::clamp(xf_.toPageY(y) - line / 2, 0.0, std::max(0.0, page.height - line));
+        els.push_back(textElement(nullptr, "", tx, ty, size));
+        text_.index = els.size() - 1;
+        text_.isNew = true;
+    }
+    keyboard_.setShift(typed().text.empty());  // a capital to start with
+    placeKeyboard();
+    // The frame and caret: black over the page, so DU.
+    drawChrome(textArea());
+    damage_.push_back({textArea(), Refresh::UI});
+}
+
+// The text, at least two ems wide and a line tall, so an empty one shows where it is.
+IRect Editor::textFrame() const {
+    if (!text_.active) return {};
+    const ForeignElement& f = typed();
+    RectF b = f.bounds;
+    b.add(f.textX + 2 * f.textSize, f.textY + Font::sans().lineHeight() * f.textSize);
+    return xf_.toScreen(b).grown(kFramePad);
+}
+
+IRect Editor::caretRect() const {
+    if (!text_.active) return {};
+    const ForeignElement& f = typed();
+    const Font& font = Font::sans();
+    const std::vector<TextLine> lines = font.layout(f.text, f.textSize, f.textWrap);
+    size_t row = 0;
+    while (row + 1 < lines.size() && text_.caret > lines[row].end) ++row;
+    const double x = f.textX + font.advance(f.text, lines[row].begin, text_.caret) * f.textSize;
+    const double y = f.textY + row * font.lineHeight() * f.textSize;
+    const int sx = static_cast<int>(std::lround(xf_.toScreenX(x)));
+    return {sx - 1, static_cast<int>(std::lround(xf_.toScreenY(y))), sx + 2,
+            static_cast<int>(std::lround(xf_.toScreenY(y + font.lineHeight() * f.textSize)))};
+}
+
+void Editor::drawTextEdit(const IRect& clip) {
+    if (!text_.active) return;
+    dashedFrame(canvas_, textFrame(), clip);
+    canvas_.fill(caretRect().intersected(clip), 0);
+}
+
+// The keyboard goes along the bottom, unless it would hide the line being typed.
+void Editor::placeKeyboard() {
+    const bool top = caretRect().y1 + 20 > keyboard_.rectAt(false).y0;
+    if (keyboard_.open() && keyboard_.atTop() == top) return;
+    const IRect before = keyboard_.open() ? keyboard_.rect() : IRect{};
+    keyboard_.show(top);
+    drawChrome(keyboard_.rect());  // black and white over the page: DU
+    damage_.push_back({keyboard_.rect(), Refresh::UI});
+    repaint(before, Refresh::Content);  // where it was
+}
+
+void Editor::setText(std::string text, size_t caret, double size, uint64_t now) {
+    const IRect before = textArea();
+    Element& el = currentPage().layers[currentLayer()].elements[text_.index];
+    ForeignElement next = textElement(&std::get<ForeignElement>(el), text, typed().textX, typed().textY, size);
+    el = std::move(next);
+    text_.caret = caret;
+    markModified(now);
+    // Shown at once in black and white, and properly once the typing pauses.
+    previewArea(before.united(textArea()), now);
+    placeKeyboard();
+}
+
+void Editor::type(const std::string& s, uint64_t now) {
+    if (!text_.active || s.empty()) return;
+    std::string t = typed().text;
+    size_t caret = std::min(text_.caret, t.size());
+    if (s == "\b") {
+        if (caret == 0) return;
+        const size_t from = prevCodePointStart(t, caret);
+        t.erase(from, caret - from);
+        caret = from;
+    } else {
+        t.insert(caret, s);
+        caret += s.size();
+        // A line that runs past the page's right edge is broken at its last space before
+        // the caret, with a real line break: Xournal++ doesn't wrap text.
+        const size_t nl = caret > 0 ? t.rfind('\n', caret - 1) : std::string::npos;
+        const size_t start = nl == std::string::npos ? 0 : nl + 1;
+        const size_t end = std::min(t.find('\n', caret), t.size());
+        const ForeignElement& f = typed();
+        if (start < caret && Font::sans().advance(t, start, end) * f.textSize > currentPage().width - f.textX - kTextEdge) {
+            const size_t sp = t.rfind(' ', caret - 1);
+            if (sp != std::string::npos && sp > start) t[sp] = '\n';
+        }
+    }
+    setText(std::move(t), caret, typed().textSize, now);
+    if (keyboard_.shift() && s != "\b" && s != "\n") {  // typed on a real keyboard: SHIFT was for one capital
+        keyboard_.setShift(false);
+        drawChrome(keyboard_.rect());
+        damage_.push_back({keyboard_.rect(), Refresh::UI});
+    }
+}
+
+void Editor::keyPress(int x, int y, uint64_t now) {
+    const bool top = keyboard_.atTop();
+    const Keyboard::Press p = keyboard_.tap(x, y);
+    const bool changed = keyboard_.changed();
+    switch (p.key) {
+        case Keyboard::Key::None: return;
+        case Keyboard::Key::Done: return finishText(now);
+        case Keyboard::Key::Text: type(p.text, now); break;
+        case Keyboard::Key::Delete: type("\b", now); break;
+        case Keyboard::Key::Enter: type("\n", now); break;
+        case Keyboard::Key::Shift:
+        case Keyboard::Key::Symbols: break;
+    }
+    if (!keyboard_.open() || keyboard_.atTop() != top) return;  // it moved, and was drawn whole
+    if (changed) {
+        drawChrome(keyboard_.rect());
+        damage_.push_back({keyboard_.rect(), Refresh::UI});
+    }
+    // A key that types shows it was pressed; SHIFT and ?123 show whether they're on.
+    if (p.key != Keyboard::Key::Shift && p.key != Keyboard::Key::Symbols) flash(p.r, now);
+}
+
+void Editor::caretTo(int x, int y, uint64_t now) {
+    const IRect before = caretRect();
+    const ForeignElement& f = typed();
+    text_.caret =
+        Font::sans().offsetAt(f.text, f.textSize, f.textWrap, xf_.toPageX(x) - f.textX, xf_.toPageY(y) - f.textY);
+    previewArea(before.united(caretRect()), now);
+}
+
+void Editor::finishText(uint64_t now, bool keepKeyboard) {
+    if (!text_.active) return;
+    const IRect area = textArea();
+    IRect keyboard;
+    if (!keepKeyboard && keyboard_.open()) {
+        keyboard = keyboard_.rect();
+        keyboard_.close();
+    }
+    TextEdit t = std::move(text_);
+    text_ = TextEdit{};
+    const size_t layer = currentLayer();
+    auto& els = currentPage().layers[layer].elements;
+    const ForeignElement& f = std::get<ForeignElement>(els[t.index]);
+    if (f.text.find_first_not_of(" \n") == std::string::npos) {
+        // Nothing typed, or all of it deleted: it goes.
+        els.erase(els.begin() + static_cast<std::ptrdiff_t>(t.index));
+        if (!t.isNew) {
+            pushUndo({UndoAction::Kind::Edit, page_, layer, {{false, t.index, std::move(t.before)}}, std::nullopt});
+            markModified(now);
+        }
+    } else if (t.isNew) {
+        pushUndo({UndoAction::Kind::Edit, page_, layer, {{true, t.index, Stroke{}}}, std::nullopt});
+    } else {
+        const ForeignElement& b = std::get<ForeignElement>(t.before);
+        if (b.text != f.text || b.textSize != f.textSize)
+            pushUndo({UndoAction::Kind::Edit, page_, layer, {{false, t.index, std::move(t.before)}, {true, t.index, Stroke{}}},
+                      std::nullopt});
+    }
+    repaint(area, Refresh::Content);
+    repaint(keyboard, Refresh::Content);
+}
+
 // ---- actions ----
 
 void Editor::perform(Action a, uint64_t now) {
+    // Typing is done with anything but the tools panel, whose sizes go for the text too.
+    const bool keepsTyping = a == Action::None || a == Action::Tools || a == Action::Text || a == Action::SizeFine ||
+                             a == Action::SizeMedium || a == Action::SizeThick;
+    if (!keepsTyping) finishText(now);
+
     // The selection's math buttons; anything else closes their answer.
     switch (a) {
         case Action::None: return;
@@ -1461,8 +1702,12 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::Pen:
         case Action::Highlighter:
         case Action::Eraser:
+        case Action::Text:
             clearSelection();
-            tool_ = a == Action::Pen ? ToolKind::Pen : a == Action::Highlighter ? ToolKind::Highlighter : ToolKind::Eraser;
+            tool_ = a == Action::Pen           ? ToolKind::Pen
+                    : a == Action::Highlighter ? ToolKind::Highlighter
+                    : a == Action::Eraser      ? ToolKind::Eraser
+                                               : ToolKind::Text;
             // In the panel, the tool's options come up beside it; tapping it again puts the panel away.
             if (panel_.open() && panel_.options() != a) panel_.showOptions(a);
             else panel_.setOpen(false);
@@ -1503,6 +1748,7 @@ void Editor::perform(Action a, uint64_t now) {
                                                      : a == Action::SizeMedium ? ToolSize::Medium
                                                                                : ToolSize::Thick;
             }
+            if (text_.active) setText(typed().text, text_.caret, textSize(), now);
             panel_.setOpen(false);
             return refreshPanel(panelBefore);
         case Action::ErasePartial:
@@ -1580,6 +1826,7 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::ZoomFit:
         case Action::Highlighter:
         case Action::Eraser:
+        case Action::Text:
         case Action::SizeFine:
         case Action::SizeMedium:
         case Action::SizeThick:
@@ -1613,6 +1860,8 @@ void Editor::setPage(size_t index) {
     overlayButtons_.clear();
     math_.close();
     answer_ = -1;
+    text_ = TextEdit{};  // done with already (see perform)
+    keyboard_.close();
     xf_ = fitPage(currentPage(), pageArea_);  // back to fitting the page
     zoom_ = 1;
     fingers_.clear();

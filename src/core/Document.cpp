@@ -24,41 +24,6 @@ size_t codePoints(const std::string& s) {
     return n;
 }
 
-std::vector<std::string> textLines(const ForeignElement& f) {
-    const size_t maxChars = f.textWrap > 0 && f.textSize > 0
-                                ? std::max<size_t>(1, static_cast<size_t>(f.textWrap / f.textSize))
-                                : static_cast<size_t>(-1);
-    std::vector<std::string> lines;
-    size_t start = 0;
-    while (start <= f.text.size()) {
-        size_t end = f.text.find('\n', start);
-        if (end == std::string::npos) end = f.text.size();
-        std::string line;
-        size_t len = 0, pos = start;
-        while (pos < end) {
-            size_t wordEnd = f.text.find(' ', pos);
-            if (wordEnd == std::string::npos || wordEnd > end) wordEnd = end;
-            const std::string word = f.text.substr(pos, wordEnd - pos);
-            const size_t wlen = codePoints(word);
-            if (len && len + 1 + wlen > maxChars) {
-                lines.push_back(std::move(line));
-                line.clear();
-                len = 0;
-            }
-            if (len) {
-                line += ' ';
-                ++len;
-            }
-            line += word;
-            len += wlen;
-            pos = wordEnd + 1;
-        }
-        lines.push_back(std::move(line));
-        start = end + 1;
-    }
-    return lines;
-}
-
 RectF elementBounds(const Element& e) {
     if (const auto* s = std::get_if<Stroke>(&e)) return s->bounds();
     return std::get<ForeignElement>(e).bounds;

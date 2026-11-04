@@ -36,6 +36,22 @@ FetchContent_Declare(pugixml
   URL_HASH SHA256=655ade57fa703fb421c2eb9a0113b5064bddb145d415dd1f88c79353d90d511a
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(pugixml)
+# Typed text on the page: DejaVu Sans (Xournal++'s "Sans" on most Linux systems), drawn
+# with stb_truetype. The font is built into the app.
+FetchContent_Declare(dejavu
+  URL https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2
+  URL_HASH SHA256=fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_Declare(stb
+  URL https://raw.githubusercontent.com/nothings/stb/6e9f34d5429cf16790ec43c9bac3f1ee4ad1f760/stb_truetype.h
+  URL_HASH SHA256=ecd30b05e0dd4fea3a13c26810dd9e1992dc379049482c393d5a19e6b5090aab
+  DOWNLOAD_NO_EXTRACT TRUE)
+FetchContent_MakeAvailable(dejavu stb)
+set(SCRIBLE_FONT_DATA "${CMAKE_BINARY_DIR}/generated/SansFont.cpp")
+add_custom_command(OUTPUT "${SCRIBLE_FONT_DATA}"
+  COMMAND "${CMAKE_COMMAND}" -DIN=${dejavu_SOURCE_DIR}/ttf/DejaVuSans.ttf -DOUT=${SCRIBLE_FONT_DATA} -DNAME=kSansFont
+          -P "${CMAKE_SOURCE_DIR}/cmake/embed.cmake"
+  DEPENDS "${dejavu_SOURCE_DIR}/ttf/DejaVuSans.ttf" "${CMAKE_SOURCE_DIR}/cmake/embed.cmake")
 
 find_package(ZLIB REQUIRED)
 
@@ -54,6 +70,8 @@ add_library(scrible_core STATIC
   src/core/Editor.cpp
   src/core/EinkPanel.cpp
   src/core/Eraser.cpp
+  src/core/Font.cpp
+  src/core/Keyboard.cpp
   src/core/Lasso.cpp
   src/core/Library.cpp
   src/core/MathPopup.cpp
@@ -67,8 +85,13 @@ add_library(scrible_core STATIC
   src/core/Toolbar.cpp
   src/core/ToolPanel.cpp
   src/core/Widgets.cpp
-  src/core/XoppFile.cpp)
+  src/core/XoppFile.cpp
+  src/core/StbTruetype.cpp
+  "${SCRIBLE_FONT_DATA}")
+# stb's own code isn't held to our warnings.
+set_source_files_properties(src/core/StbTruetype.cpp PROPERTIES COMPILE_OPTIONS "-w")
 target_include_directories(scrible_core PUBLIC src/core)
+target_include_directories(scrible_core SYSTEM PRIVATE "${stb_SOURCE_DIR}")
 target_compile_definitions(scrible_core PRIVATE SCRIBLE_VERSION="${SCRIBLE_VERSION_STRING}")
 # The commit being built, for the About dialog; checked on every build.
 set(SCRIBLE_BUILD_INFO "${CMAKE_BINARY_DIR}/generated/BuildInfo.h")

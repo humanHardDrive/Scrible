@@ -15,6 +15,7 @@
 #include "Canvas.h"
 #include "DigitReader.h"
 #include "Document.h"
+#include "Keyboard.h"
 #include "MathPopup.h"
 #include "PaperMenu.h"
 #include "Renderer.h"
@@ -48,7 +49,7 @@ struct PenSample {
     bool button = false;    // side button held: highlights whatever the tool, like the native notebook
 };
 
-enum class ToolKind { Pen, Highlighter, Eraser, Lasso, Pan };
+enum class ToolKind { Pen, Highlighter, Eraser, Text, Lasso, Pan };
 
 struct EditorOptions {
     RenderStyle render;  // the Kindle turns antialiasing off (see RenderStyle)
@@ -57,7 +58,8 @@ struct EditorOptions {
     bool fromList = false;
     bool eraseWholeStrokes = false;  // eraser mode to start in
     bool recognizeShapes = false;    // pen mode to start in (SHAPE rather than PEN)
-    std::array<ToolSize, 3> sizes{ToolSize::Medium, ToolSize::Medium, ToolSize::Medium};  // pen, highlighter, eraser
+    // pen, highlighter, eraser, text
+    std::array<ToolSize, 4> sizes{ToolSize::Medium, ToolSize::Medium, ToolSize::Medium, ToolSize::Medium};
     int toolbarHeight = 120;
     double dpi = 300;  // sizes new notebooks so a page fills the screen
     std::string pageStyle = "lined";
@@ -76,6 +78,7 @@ public:
     const ToolPanel& toolPanel() const { return panel_; }
     const PaperMenu& paperMenu() const { return paperMenu_; }
     const MathPopup& mathPopup() const { return math_; }
+    const Keyboard& keyboard() const { return keyboard_; }
     // Math answers on this page (element indices in the top layer), and each one's i,
     // which shows the numbers it was worked out from.
     std::vector<size_t> answers() const;
@@ -89,6 +92,15 @@ public:
     ToolSize toolSize(ToolKind t) const {
         return t == ToolKind::Lasso || t == ToolKind::Pan ? ToolSize::Medium : sizes_[static_cast<size_t>(t)];
     }
+    // Typing with the TEXT tool: the text being typed (an element index in the top
+    // layer), the caret's place on the screen, and the keyboard's input. type() takes
+    // UTF-8 text; "\b" deletes the character before the caret, and "\n" starts a line.
+    bool typing() const { return text_.active; }
+    size_t typedText() const { return text_.index; }
+    size_t caret() const { return text_.caret; }
+    IRect caretRect() const;
+    void type(const std::string& s, uint64_t now);
+
     // The view of the page: zoom() is relative to fitting it in the drawing area (1 to 4).
     double zoom() const { return zoom_; }
     const PageTransform& view() const { return xf_; }
@@ -233,6 +245,20 @@ private:
     void replaceAnswer(size_t i, ForeignElement a, uint64_t now);
     void deleteAnswer(uint64_t now);
     void dragAnswerTo(const StrokePoint& p);
+    int textAt(int x, int y) const;  // a text (not a math answer) of the top layer there, or -1
+    const ForeignElement& typed() const;
+    double textSize() const;
+    void startText(int x, int y, uint64_t now);
+    void setText(std::string text, size_t caret, double size, uint64_t now);
+    IRect textFrame() const;
+    IRect textArea() const { return textFrame().united(caretRect()).grown(2); }
+    void drawTextEdit(const IRect& clip);
+    void placeKeyboard();
+    void keyPress(int x, int y, uint64_t now);
+    void caretTo(int x, int y, uint64_t now);
+    // Done typing: the text becomes an undo step (it goes if it's empty). The keyboard
+    // can stay up, for another text.
+    void finishText(uint64_t now, bool keepKeyboard = false);
     void finishExit(uint64_t now);
     void updateToolbar();
     void markModified(uint64_t now);
@@ -247,6 +273,7 @@ private:
     ToolPanel panel_;
     PaperMenu paperMenu_;
     MathPopup math_;
+    Keyboard keyboard_;
     int answer_ = -1;                      // the answer whose numbers the popup shows (an element index)
     std::unique_ptr<DigitReader> digits_;  // loaded the first time it's needed
     ForeignElement answerBefore_;          // an answer being dragged, as it was
@@ -285,7 +312,7 @@ private:
 
     ToolKind tool_ = ToolKind::Pen;
     ToolKind inkTool_ = ToolKind::Pen;  // what the stroke being written is drawn with
-    std::array<ToolSize, 3> sizes_;  // indexed by ToolKind
+    std::array<ToolSize, 4> sizes_;  // indexed by ToolKind
     bool eraseWhole_ = false;  // eraser removes whole strokes instead of cutting them
     bool shapes_ = false;      // pen strokes are recognized as shapes
     // Lines recognized one after another, which may still close into a polygon or
@@ -306,6 +333,16 @@ private:
         RectF bounds;
     };
     Selection sel_;
+    // The text being typed. It's in the document from the start; becoming an undo
+    // step waits until the typing is done.
+    struct TextEdit {
+        bool active = false;
+        size_t index = 0;  // in the top layer
+        bool isNew = false;
+        Element before;    // as it was, unless it's new
+        size_t caret = 0;  // a byte offset into its text
+    };
+    TextEdit text_;
     std::vector<OverlayButton> overlayButtons_;
     SelectionMenu selectionMenu_ = SelectionMenu::None;  // which of EDIT and MATH is open
     std::vector<StrokePoint> lasso_;  // the loop being drawn (page coordinates)
