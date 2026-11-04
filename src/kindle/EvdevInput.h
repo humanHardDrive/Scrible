@@ -58,6 +58,8 @@ public:
     bool open(const std::string& path, int screenWidth, int screenHeight, const InputTransform& t, bool grab,
               std::string& error);
     int fd() const { return fd_; }
+    // Takes or gives back exclusive access, e.g. so the Kindle's lock screen gets the input while it sleeps.
+    void grab(bool on);
 
 protected:
     void toScreen(int rawX, int rawY, double& x, double& y) const;

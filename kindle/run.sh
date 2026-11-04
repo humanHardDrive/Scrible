@@ -56,7 +56,7 @@ restore() {
     RESTORED=yes
     [ "${STATUSBAR_STOPPED}" = "yes" ] && start statusbar
     killall -CONT awesome
-    lipc-set-prop com.lab126.powerd preventScreenSaver 0
+    lipc-set-prop com.lab126.powerd preventScreenSaver 0  # set by versions before 1.1
     # Leave something sensible on screen until the home screen redraws.
     if [ -f "${FB_DUMP}" ]; then
         cat "${FB_DUMP}" >/dev/fb0
@@ -70,14 +70,16 @@ trap 'restore; exit 1' HUP INT TERM
 cat /dev/fb0 >"${FB_DUMP}"
 lipc-set-prop com.lab126.pillow disableEnablePillow disable
 # Disabling pillow isn't enough to stop the clock from redrawing; freeze the window manager.
+# (The app lets it run while the Kindle shows its sleep screen, which awesome draws.)
 killall -STOP awesome
+export SCRIBLE_AWESOME_STOPPED=yes
 # On newer firmware the status bar is a separate job that would draw over us.
 if [ -f /etc/upstart/statusbar.conf ]; then
     stop statusbar && STATUSBAR_STOPPED=yes
 fi
-# We grab the touch and pen devices, so the framework can't see activity; don't
-# let it decide we're idle and sleep mid-sentence. The power button still works.
-lipc-set-prop com.lab126.powerd preventScreenSaver 1
+# We grab the touch and pen devices, so the framework can't see activity: the app
+# resets powerd's idle timer while you write (as KOReader does). preventScreenSaver
+# would also keep the power button from putting the Kindle to sleep.
 
 # Copying over USB/MTP can drop the executable bit.
 chmod +x "${APP_DIR}/bin/scrible" 2>/dev/null

@@ -145,11 +145,22 @@ does this on firmware 5.x, still when started from its KPM scriptlet
 4. On exit, reverse all of it, restore the saved framebuffer and start the home booklet.
 
 The app also grabs the pen and touch devices (EVIOCGRAB) so the framework doesn't react to
-them. Because of that, the launcher sets `preventScreenSaver` so the device doesn't go idle
-while you write. Sleep and wake come from `lipc-wait-event -m -s 0 com.lab126.powerd
-goingToScreenSaver,outOfScreenSaver`: the app saves on sleep and redraws on wake.
-**Unverified:** the `lipc-wait-event` flags, and how the stock screensaver behaves while
-awesome is stopped.
+them, which also hides your activity from powerd's idle timer. So, as KOReader does, the
+app resets that timer itself while you write (`lipc-set-prop -i com.lab126.powerd
+touchScreenSaverTimeout 1`, at most once a minute), and the Kindle still sleeps after
+being left idle. Versions before 1.1 set `preventScreenSaver 1` instead, which also kept
+the power button from putting the Kindle to sleep (seen on the Scribe).
+
+Sleep and wake come from `lipc-wait-event -m -s 0 com.lab126.powerd
+goingToScreenSaver,outOfScreenSaver,exitingScreenSaver`, each logged as `scrible: powerd: …`
+(the number is the source: 2 the power button, 1 its wake-up; 4/6 a cover;
+exitingScreenSaver is only logged, to learn its timing). Going to sleep, the app saves,
+releases its grabs so the lock screen gets the touchscreen, ignores input apart from
+lifts, draws nothing, and lets awesome run again, since it draws the Kindle's sleep
+screen (KOReader does the same where it leaves the screensaver to the system). On
+outOfScreenSaver it grabs again, freezes awesome and redraws. Seen on the Scribe (1.1-dev):
+the button and the idle timeout both show the sleep screen, the lock screen gets the input,
+and waking logs `outOfScreenSaver 1` then `exitingScreenSaver`.
 
 ## Toolchain
 

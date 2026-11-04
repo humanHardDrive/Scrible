@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdio>
 
 namespace scrible {
 
@@ -26,7 +27,7 @@ bool PowerEvents::start() {
         if (null >= 0) dup2(null, STDERR_FILENO);
         // -m: keep listening after the first event; -s 0: no timeout.
         execlp("lipc-wait-event", "lipc-wait-event", "-m", "-s", "0", "com.lab126.powerd",
-               "goingToScreenSaver,outOfScreenSaver", static_cast<char*>(nullptr));
+               "goingToScreenSaver,outOfScreenSaver,exitingScreenSaver", static_cast<char*>(nullptr));
         _exit(127);
     }
     ::close(p[1]);
@@ -63,6 +64,7 @@ std::vector<PowerEvents::Event> PowerEvents::read() {
     while ((nl = pending_.find('\n')) != std::string::npos) {
         const std::string line = pending_.substr(0, nl);
         pending_.erase(0, nl + 1);
+        std::fprintf(stderr, "scrible: powerd: %s\n", line.c_str());  // e.g. "goingToScreenSaver 2" (the button); exitingScreenSaver is only logged
         if (line.find("goingToScreenSaver") != std::string::npos) out.push_back(Event::GoingToSleep);
         else if (line.find("outOfScreenSaver") != std::string::npos) out.push_back(Event::WokeUp);
     }

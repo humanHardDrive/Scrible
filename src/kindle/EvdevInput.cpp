@@ -137,6 +137,11 @@ bool EvdevDevice::open(const std::string& path, int screenWidth, int screenHeigh
     return true;
 }
 
+void EvdevDevice::grab(bool on) {
+    if (fd_ >= 0 && ioctl(fd_, EVIOCGRAB, on ? 1 : 0) < 0)
+        std::fprintf(stderr, "scrible: couldn't %s input: %s\n", on ? "grab" : "release", std::strerror(errno));
+}
+
 void EvdevDevice::toScreen(int rawX, int rawY, double& x, double& y) const {
     double nx = x_.normalize(rawX), ny = y_.normalize(rawY);
     if (transform_.swapAxes) std::swap(nx, ny);

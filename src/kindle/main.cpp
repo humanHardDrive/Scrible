@@ -195,6 +195,16 @@ int probe(scrible::FbinkDisplay& display, const Args& args, const scrible::Input
 
 }  // namespace
 
+// Tells powerd the Kindle is in use: the app grabs the pen and touchscreen, so it can't
+// see that for itself. Then the Kindle still sleeps when left idle, and with the power
+// button, and not while you write. (KOReader does the same; at most once a minute.)
+void stillHere(uint64_t now) {
+    static uint64_t last = 0;
+    if (last && now < last + 60000) return;
+    last = now ? now : 1;
+    std::system("lipc-set-prop -i com.lab126.powerd touchScreenSaverTimeout 1 >/dev/null 2>&1 &");
+}
+
 int main(int argc, char** argv) {
     Args args;
     if (!parseArgs(argc, argv, args)) {
@@ -214,6 +224,8 @@ int main(int argc, char** argv) {
 
     // Before opening anything else, so the child doesn't inherit our descriptors.
     scrible::PowerEvents power;
+    const char* stopped = std::getenv("SCRIBLE_AWESOME_STOPPED");
+    const bool awesomeStopped = stopped && std::string(stopped) == "yes";
     if (args.probeSeconds < 0 && !power.start()) std::fprintf(stderr, "scrible: no sleep/wake notifications\n");
 
     scrible::FbinkDisplay display;
@@ -274,6 +286,9 @@ int main(int argc, char** argv) {
     std::vector<scrible::PenEvent> penEvents;
     std::vector<scrible::TouchEvent> touchEvents;
     PressureStats stats;
+    // While the Kindle shows its sleep or lock screen, the input is its own and the
+    // screen is left alone. Lifts still come through, so a stroke or pinch ends cleanly.
+    bool asleep = false;
     while (!g_quit && !app.quitRequested()) {
         pollfd fds[4] = {{pen.fd(), POLLIN, 0}, {touch.fd(), POLLIN, 0}, {power.fd(), POLLIN, 0},
                          {pen.pressureFd(), POLLIN, 0}};
@@ -286,7 +301,9 @@ int main(int argc, char** argv) {
         if (fds[3].revents & POLLIN) pen.readPressure();
         penEvents.clear();
         if (fds[0].revents & POLLIN) pen.read(penEvents);
+        if (!asleep && (!penEvents.empty() || (fds[1].revents & POLLIN))) stillHere(now);
         for (const auto& e : penEvents) {
+            if (asleep && e.type != scrible::PenEvent::Type::Up) continue;
             if (e.type != scrible::PenEvent::Type::Up) stats.add(e.pressure);
             const scrible::PenSample s{e.x, e.y, e.pressure, e.eraser, e.button};
             switch (e.type) {
@@ -301,6 +318,7 @@ int main(int argc, char** argv) {
         // Pinching only works with the pen away from the screen (palm rejection).
         app.setPenNear(pen.near());
         for (const auto& e : touchEvents) {
+            if (asleep && e.type != scrible::TouchEvent::Type::Up) continue;
             const int x = static_cast<int>(e.x), y = static_cast<int>(e.y);
             switch (e.type) {
                 case scrible::TouchEvent::Type::Down: app.touchDown(e.id, x, y, now); break;
@@ -311,13 +329,31 @@ int main(int argc, char** argv) {
 
         if (fds[2].revents & (POLLIN | POLLHUP)) {
             for (const auto ev : power.read()) {
-                if (ev == scrible::PowerEvents::Event::GoingToSleep) app.saveNow(now);
-                if (ev == scrible::PowerEvents::Event::WokeUp) app.redrawAll(scrible::Refresh::Full);
+                if (ev == scrible::PowerEvents::Event::GoingToSleep && !asleep) {
+                    asleep = true;
+                    app.saveNow(now);
+                    if (args.grab) {
+                        pen.grab(false);
+                        touch.grab(false);
+                    }
+                    // The Kindle's sleep screen is drawn by the window manager the launcher froze.
+                    if (awesomeStopped) std::system("killall -CONT awesome");
+                }
+                if (ev == scrible::PowerEvents::Event::WokeUp && asleep) {
+                    asleep = false;
+                    if (args.grab) {
+                        pen.grab(true);
+                        touch.grab(true);
+                    }
+                    if (awesomeStopped) std::system("killall -STOP awesome");
+                    app.redrawAll(scrible::Refresh::Full);
+                }
             }
         }
 
         app.onIdle(now);
-        display.present(app.canvas(), app.takeDamage());
+        const auto damage = app.takeDamage();
+        if (!asleep) display.present(app.canvas(), damage);
     }
 
     stats.log(pen);
