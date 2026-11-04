@@ -2665,6 +2665,16 @@ TEST(selection_math_reads_and_can_be_corrected) {
     CHECK_NEAR(answer(0).textX, x0, 1e-9);
     e.perform(Action::Redo, t += 10);
     flush();
+    // Not off the page, though.
+    const RectF wasAt = answer(0).bounds;
+    const IRect far = center(xf(e, wasAt));
+    pen({{double(far.x0), double(far.y0)}, {far.x0 + 4000.0, far.y0 + 4000.0}});
+    const Page& pg = e.document().pages[0];
+    // (Positions are kept to a hundredth of a point in the file: allow for the rounding.)
+    CHECK(answer(0).bounds.x1 <= pg.width + 0.01 && answer(0).bounds.y1 <= pg.height + 0.01);
+    CHECK(answer(0).bounds.x1 > pg.width - 1);
+    e.perform(Action::Undo, t += 10);
+    flush();
 
     // Another function makes another answer, read afresh (that 2 now reads as a 7);
     // DELETE in its popup takes it away.
@@ -2894,6 +2904,46 @@ TEST(tapping_the_name_shows_it_whole) {
     CHECK(inkIn({title.x1, title.y0, bar.x1, title.y1}) == before);
     tap(undo);  // and now it's UNDO again
     CHECK(e.document().pages[0].layers.back().elements.empty());
+}
+
+TEST(selections_and_answers_stay_on_the_page) {
+    Editor e(900, 1200, Document{}, tempPath("edges.xopp"));
+    uint64_t t = 0;
+    const Page& page = e.document().pages[0];
+    const auto& els = page.layers.back().elements;
+    auto path = [&](const std::vector<StrokePoint>& pts) {
+        e.penDown({pts[0].x, pts[0].y, 0.5, false}, t += 10);
+        for (size_t i = 1; i < pts.size(); ++i) e.penMove({pts[i].x, pts[i].y, 0.5, false}, t += 20);
+        e.penUp(t += 10);
+    };
+    auto bounds = [&] {
+        RectF r;
+        for (size_t i : e.selection()) {
+            const RectF b = std::get<Stroke>(els[i]).bounds();
+            r.add(b.x0, b.y0);
+            r.add(b.x1, b.y1);
+        }
+        return r;
+    };
+    drawLine(e, 300, 500, 600, t);
+    drawLine(e, 300, 500, 650, t);
+    e.perform(Action::Lasso, t += 10);
+    path({{250, 560}, {550, 560}, {550, 690}, {250, 690}, {255, 565}});
+    CHECK(e.selection().size() == 2);
+    // Dragged far past the bottom right, then the top left: it stops at the edges.
+    for (double far : {5000.0, -5000.0}) {
+        const IRect f = center(e.selectionFrame());
+        path({{double(f.x0), double(f.y0)}, {f.x0 + far / 2, f.y0 + far / 2}, {f.x0 + far, f.y0 + far}});
+        const RectF b = bounds();
+        CHECK(b.x0 >= -1e-6 && b.y0 >= -1e-6 && b.x1 <= page.width + 1e-6 && b.y1 <= page.height + 1e-6);
+        CHECK(far > 0 ? b.x1 > page.width - 1 && b.y1 > page.height - 1 : b.x0 < 1 && b.y0 < 1);  // right up to them
+    }
+    // Grown with the handle as far as it'll go: up to the page's edge, no further.
+    const IRect h = center(e.selectionHandle());
+    path({{double(h.x0), double(h.y0)}, {h.x0 + 3000.0, h.y0 + 3000.0}});
+    const RectF b = bounds();
+    CHECK(b.x1 <= page.width + 1e-6 && b.y1 <= page.height + 1e-6);
+    CHECK(b.x1 > page.width - 1 || b.y1 > page.height - 1);
 }
 
 int main() {

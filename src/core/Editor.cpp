@@ -54,6 +54,12 @@ ToolbarGroups editorToolbar(bool fromList) {
     return g;
 }
 
+// How far something spanning lo..hi may move (by d) and stay within 0..size: up to
+// the edges. If it's over an edge already, it may stay there but go no further.
+double keepOnPage(double d, double lo, double hi, double size) {
+    return std::clamp(d, std::min(0.0, -lo), std::max(0.0, size - hi));
+}
+
 // Whether a sweep of the eraser from a to b, r to either side, touches the box.
 bool sweepTouches(const RectF& box, const StrokePoint& a, const StrokePoint& b, double r) {
     RectF g = box;
@@ -1246,8 +1252,10 @@ void Editor::deleteAnswer(uint64_t now) {
 void Editor::dragAnswerTo(const StrokePoint& p) {
     const IRect before = answerArea(dragAnswer_);
     const ForeignElement& a = answerBefore_;
-    ForeignElement moved = answerElement(a.mathOp, a.mathNumbers, a.text, a.textX + p.x - dragStart_.x,
-                                         a.textY + p.y - dragStart_.y, a.textSize);
+    const Page& page = currentPage();
+    const double dx = keepOnPage(p.x - dragStart_.x, a.bounds.x0, a.bounds.x1, page.width);
+    const double dy = keepOnPage(p.y - dragStart_.y, a.bounds.y0, a.bounds.y1, page.height);
+    ForeignElement moved = answerElement(a.mathOp, a.mathNumbers, a.text, a.textX + dx, a.textY + dy, a.textSize);
     moved.mathShapes = a.mathShapes;
     currentPage().layers[currentLayer()].elements[dragAnswer_] = std::move(moved);
     dragDirty_ = dragDirty_.united(before).united(answerArea(dragAnswer_));
@@ -1318,16 +1326,23 @@ void Editor::startDrag(DragKind kind, const StrokePoint& p) {
 void Editor::dragTo(const StrokePoint& p) {
     const IRect before = overlayArea();
     auto& els = currentPage().layers[sel_.layer].elements;
+    const Page& page = currentPage();
     if (dragKind_ == DragKind::Move) {
-        const double dx = p.x - dragStart_.x, dy = p.y - dragStart_.y;
+        // It stops at the page's edges.
+        const double dx = keepOnPage(p.x - dragStart_.x, dragFrom_.x0, dragFrom_.x1, page.width);
+        const double dy = keepOnPage(p.y - dragStart_.y, dragFrom_.y0, dragFrom_.y1, page.height);
         for (size_t k = 0; k < sel_.indices.size(); ++k) els[sel_.indices[k]] = movedStroke(dragOriginals_[k], dx, dy);
     } else {
-        // Uniform scale about the top-left corner, following the pen along the diagonal.
+        // Uniform scale about the top-left corner, following the pen along the diagonal,
+        // and growing no further than the page's right and bottom edges.
         const StrokePoint anchor{dragFrom_.x0, dragFrom_.y0};
         const double vx = dragFrom_.x1 - anchor.x, vy = dragFrom_.y1 - anchor.y;
         const double len2 = vx * vx + vy * vy;
+        double most = 10.0;
+        if (vx > 0) most = std::min(most, (page.width - anchor.x) / vx);
+        if (vy > 0) most = std::min(most, (page.height - anchor.y) / vy);
         const double factor =
-            len2 > 0 ? std::clamp(((p.x - anchor.x) * vx + (p.y - anchor.y) * vy) / len2, 0.1, 10.0) : 1.0;
+            len2 > 0 ? std::clamp(((p.x - anchor.x) * vx + (p.y - anchor.y) * vy) / len2, 0.1, std::max(1.0, most)) : 1.0;
         for (size_t k = 0; k < sel_.indices.size(); ++k)
             els[sel_.indices[k]] = scaledStroke(dragOriginals_[k], anchor, factor);
     }
