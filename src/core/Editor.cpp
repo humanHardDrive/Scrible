@@ -43,6 +43,17 @@ constexpr double kHighlighterWidths[] = {2.83, 8.50, 19.84};
 constexpr double kEraserWidths[] = {2.83, 8.50, 19.84};
 constexpr double kTextSizes[] = {10, 14, 20};  // points, like Xournal++'s font sizes
 constexpr double kTextEdge = 5;                // points kept clear at the page's right edge while typing
+// Xournal++'s dotted and dashed patterns (points along the line), for the fine and
+// medium pens; thicker ones space them out in proportion, or the dots would touch.
+const std::vector<double> kDotPattern = {0.5, 3}, kDashPattern = {6, 3};
+
+std::vector<double> linePattern(LineStyle line, double width) {
+    if (line == LineStyle::Solid) return {};
+    std::vector<double> p = line == LineStyle::Dots ? kDotPattern : kDashPattern;
+    const double k = std::max(1.0, width / kPenWidths[1]);
+    for (double& d : p) d = std::round(d * k * 100) / 100;  // as it's saved
+    return p;
+}
 
 // The drawing tools are in the panel along the left edge (ToolPanel). The notebook's
 // name fills the room between UNDO / REDO and the page controls.
@@ -130,7 +141,8 @@ Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path
       path_(std::move(path)),
       sizes_(opts_.sizes),
       eraseWhole_(opts_.eraseWholeStrokes),
-      shapes_(opts_.recognizeShapes) {
+      shapes_(opts_.recognizeShapes),
+      line_(opts_.penLine) {
     if (doc_.pages.empty()) {
         // New notebook: one page exactly the size of the drawing area.
         doc_.pages.push_back(makeBlankPage(pageArea_.width() * 72.0 / opts_.dpi,
@@ -257,6 +269,7 @@ ToolPanelState Editor::panelState() const {
     s.tool = tools[static_cast<int>(tool_)];
     s.shapes = shapes_;
     s.eraseWhole = eraseWhole_;
+    s.line = line_;
     if (tool_ != ToolKind::Lasso && tool_ != ToolKind::Pan) {
         // For TEXT, the font sizes.
         const double* widths = tool_ == ToolKind::Pen           ? kPenWidths
@@ -587,6 +600,7 @@ void Editor::penDown(const PenSample& s, uint64_t now) {
     live_.tool = hl ? StrokeTool::Highlighter : StrokeTool::Pen;
     live_.color = hl ? kHighlighterColor : kPenColor;
     live_.width = toolWidth();
+    if (!hl) live_.dashes = linePattern(line_, live_.width);
     live_.points = {{xf_.toPageX(s.x), xf_.toPageY(s.y)}};
     livePointWidths_ = {pointWidth(s)};
 
@@ -1874,6 +1888,15 @@ void Editor::perform(Action a, uint64_t now) {
             if (text_.active) setText(typed().text, text_.caret, textSize(), now);
             panel_.setOpen(false);
             return refreshPanel(panelBefore);
+        case Action::LineSolid:
+        case Action::LineDots:
+        case Action::LineDashes:
+            clearSelection();
+            line_ = a == Action::LineDots ? LineStyle::Dots : a == Action::LineDashes ? LineStyle::Dashes : LineStyle::Solid;
+            tool_ = ToolKind::Pen;
+            panel_.setOpen(false);
+            setStatus(a == Action::LineDots ? "DOTTED" : a == Action::LineDashes ? "DASHED" : "SOLID", now);
+            return refreshPanel(panelBefore);
         case Action::ErasePartial:
         case Action::EraseWhole:
             clearSelection();
@@ -1955,6 +1978,9 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::SizeThick:
         case Action::ErasePartial:
         case Action::EraseWhole:
+        case Action::LineSolid:
+        case Action::LineDots:
+        case Action::LineDashes:
         case Action::NewNotebook:  // the library's
         case Action::About:
         case Action::Sort:

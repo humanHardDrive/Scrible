@@ -62,6 +62,53 @@ void rasterizeCapsule(double ax, double ay, double bx, double by, double r, cons
     }
 }
 
+// The inked parts of a segment `len` points long that starts `along` points into
+// the stroke: piece(t0, t1) for each, as fractions of the segment. All of it for a
+// solid line; for a dashed one, its dashes there (like cairo, an odd pattern repeats
+// with inked and blank swapped). A dash of no length, or on a segment of no length,
+// is a dot.
+template <typename Piece>
+void inkedPieces(const std::vector<double>& dashes, double along, double len, Piece&& piece) {
+    double period = 0;
+    for (double d : dashes) period += d;
+    const size_t n = dashes.size() % 2 ? 2 * dashes.size() : dashes.size();
+    if (n) period *= double(n) / dashes.size();
+    if (!(period > 0)) {
+        piece(0.0, 1.0);
+        return;
+    }
+    auto dash = [&](size_t j) { return dashes[j % dashes.size()]; };
+    // Where in the pattern the segment starts.
+    double q = std::fmod(along, period);
+    size_t j = 0;
+    for (size_t k = 0; k < n && q >= dash(j); ++k, j = (j + 1) % n) q -= dash(j);
+    double left = std::max(0.0, dash(j) - q);
+    double pos = 0;
+    for (int guard = 0; guard < 100000; ++guard) {
+        const double step = std::min(left, len - pos);
+        if (j % 2 == 0) piece(len > 0 ? pos / len : 0, len > 0 ? (pos + step) / len : 0);
+        pos += step;
+        if (pos >= len) break;
+        j = (j + 1) % n;
+        left = dash(j);
+    }
+}
+
+double segmentLength(const Stroke& s, size_t i) {
+    return std::hypot(s.points[i + 1].x - s.points[i].x, s.points[i + 1].y - s.points[i].y);
+}
+
+// Calls capsule(ax, ay, bx, by) on the screen for each inked part of segment i.
+template <typename Capsule>
+void inkedParts(const Stroke& s, size_t i, double along, const PageTransform& t, Capsule&& capsule) {
+    const auto& a = s.points[i];
+    const auto& b = s.points[i + 1];
+    const double ax = t.toScreenX(a.x), ay = t.toScreenY(a.y), bx = t.toScreenX(b.x), by = t.toScreenY(b.y);
+    inkedPieces(s.dashes, along, segmentLength(s, i), [&](double t0, double t1) {
+        capsule(ax + (bx - ax) * t0, ay + (by - ay) * t0, ax + (bx - ax) * t1, ay + (by - ay) * t1);
+    });
+}
+
 double segmentRadius(const Stroke& s, size_t i, const PageTransform& t) {
     return std::max(s.segmentWidth(i) * t.scale / 2, kMinRadius);
 }
@@ -82,15 +129,16 @@ void drawStrokeIn(Canvas& c, const Stroke& s, const RectF& bounds, const PageTra
     static thread_local std::vector<uint8_t> mask;
     const int bw = box.width();
     mask.assign(static_cast<size_t>(bw) * box.height(), 0);
-    for (size_t i = 0; i + 1 < s.points.size(); ++i) {
+    double along = 0;
+    for (size_t i = 0; i + 1 < s.points.size(); along += segmentLength(s, i), ++i) {
         if (s.segmentWidth(i) <= 0) continue;  // Xournal++ treats these as invisible
-        const auto& a = s.points[i];
-        const auto& b = s.points[i + 1];
-        rasterizeCapsule(t.toScreenX(a.x), t.toScreenY(a.y), t.toScreenX(b.x), t.toScreenY(b.y),
-                         segmentRadius(s, i, t), box, [&](int x, int y, uint8_t cov) {
-                             uint8_t& m = mask[static_cast<size_t>(y - box.y0) * bw + (x - box.x0)];
-                             if (cov > m) m = cov;
-                         });
+        const double r = segmentRadius(s, i, t);
+        inkedParts(s, i, along, t, [&](double ax, double ay, double bx, double by) {
+            rasterizeCapsule(ax, ay, bx, by, r, box, [&](int x, int y, uint8_t cov) {
+                uint8_t& m = mask[static_cast<size_t>(y - box.y0) * bw + (x - box.x0)];
+                if (cov > m) m = cov;
+            });
+        });
     }
 
     const uint8_t value = strokeGray(s);
@@ -251,20 +299,27 @@ IRect drawLiveSegment(Canvas& c, const Stroke& s, size_t i, const PageTransform&
     const double ax = t.toScreenX(a.x), ay = t.toScreenY(a.y), bx = t.toScreenX(b.x), by = t.toScreenY(b.y);
     const double r = segmentRadius(s, i, t);
     const IRect cl = clip.intersected(c.rect());
+    // How far along the stroke the segment starts, summed as drawStrokeIn does, so
+    // the dashes land exactly where they will in the final render.
+    double along = 0;
+    if (!s.dashes.empty())
+        for (size_t k = 0; k < i; ++k) along += segmentLength(s, k);
 
-    if (s.tool == StrokeTool::Highlighter) {
-        rasterizeCapsule(ax, ay, bx, by, r, cl, [&](int x, int y, uint8_t cov) {
-            if (cov >= 128 && ((x + y) & 1) == 0) c.row(y)[x] = 0;
-        });
-    } else {
-        const uint8_t value = strokeGray(s);
-        rasterizeCapsule(ax, ay, bx, by, r, cl, [&](int x, int y, uint8_t cov) {
-            cov = styled(cov, style);
-            if (!cov) return;
-            uint8_t& px = c.row(y)[x];
-            px = mix(px, value, cov);
-        });
-    }
+    const uint8_t value = strokeGray(s);
+    inkedParts(s, i, along, t, [&](double px0, double py0, double px1, double py1) {
+        if (s.tool == StrokeTool::Highlighter) {
+            rasterizeCapsule(px0, py0, px1, py1, r, cl, [&](int x, int y, uint8_t cov) {
+                if (cov >= 128 && ((x + y) & 1) == 0) c.row(y)[x] = 0;
+            });
+        } else {
+            rasterizeCapsule(px0, py0, px1, py1, r, cl, [&](int x, int y, uint8_t cov) {
+                cov = styled(cov, style);
+                if (!cov) return;
+                uint8_t& px = c.row(y)[x];
+                px = mix(px, value, cov);
+            });
+        }
+    });
     return capsuleBounds(ax, ay, bx, by, r).intersected(cl);
 }
 

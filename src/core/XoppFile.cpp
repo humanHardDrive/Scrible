@@ -85,6 +85,39 @@ std::string nodeXml(const pugi::xml_node& n) {
     return ss.str();
 }
 
+// Xournal++'s line styles (StrokeStyle.cpp): its named patterns, or "cust: " and the lengths.
+constexpr const char* kCustomStyle = "cust: ";
+const std::pair<const char*, std::vector<double>> kNamedStyles[] = {
+    {"dash", {6, 3}}, {"dashdot", {6, 3, 0.5, 3}}, {"dot", {0.5, 3}}};
+
+// False for a style we don't know, which is then kept as it is.
+bool parseDashes(const std::string& style, std::vector<double>& dashes) {
+    dashes.clear();
+    if (style == "plain") return true;
+    for (const auto& [name, pattern] : kNamedStyles)
+        if (style == name) {
+            dashes = pattern;
+            return true;
+        }
+    if (style.compare(0, std::strlen(kCustomStyle), kCustomStyle) != 0) return false;
+    dashes = parseNumbers(style.c_str() + std::strlen(kCustomStyle));
+    for (double d : dashes)
+        if (!(d >= 0)) dashes.clear();  // like Xournal++, a broken pattern is a solid line
+    return true;
+}
+
+std::string formatDashes(const std::vector<double>& dashes) {
+    for (const auto& [name, pattern] : kNamedStyles)
+        if (dashes == pattern) return name;
+    std::string out = kCustomStyle;
+    for (size_t i = 0; i < dashes.size(); ++i) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, i ? " %.2f" : "%.2f", dashes[i]);
+        out += buf;
+    }
+    return out;
+}
+
 bool parseStroke(const pugi::xml_node& n, Stroke& s, std::vector<std::string>* warnings) {
     const std::string tool = n.attribute("tool").as_string("pen");
     s.tool = tool == "highlighter" ? StrokeTool::Highlighter
@@ -122,6 +155,7 @@ bool parseStroke(const pugi::xml_node& n, Stroke& s, std::vector<std::string>* w
         if (!std::strcmp(name, "tool") || !std::strcmp(name, "color") || !std::strcmp(name, "width") ||
             !std::strcmp(name, "pressures"))
             continue;
+        if (!std::strcmp(name, "style") && parseDashes(a.value(), s.dashes)) continue;
         s.extraAttrs.emplace_back(name, a.value());
     }
     return true;
@@ -216,6 +250,11 @@ void appendStroke(std::string& out, const Stroke& s) {
         appendNumber(out, w, 2);
     }
     out += '"';
+    if (!s.dashes.empty()) {
+        out += " style=\"";
+        appendEscaped(out, formatDashes(s.dashes));
+        out += '"';
+    }
     for (const auto& [name, value] : s.extraAttrs) {
         out += ' ';
         out += name;

@@ -21,6 +21,20 @@ constexpr int kArrowPad = 28;
 constexpr Action kColumn[] = {Action::Pen,    Action::Shapes, Action::Lasso, Action::Highlighter,
                              Action::Eraser, Action::Text,   Action::Pan};
 constexpr Action kSizes[] = {Action::SizeFine, Action::SizeMedium, Action::SizeThick};
+constexpr Action kLines[] = {Action::LineSolid, Action::LineDots, Action::LineDashes};
+
+LineStyle lineOf(Action a) {
+    return a == Action::LineDots ? LineStyle::Dots : a == Action::LineDashes ? LineStyle::Dashes : LineStyle::Solid;
+}
+
+// A sample of a line across r, t pixels thick: solid, dotted or dashed.
+void drawSampleLine(Canvas& c, const IRect& r, int t, LineStyle line, uint8_t ink, const IRect& clip) {
+    const int y = r.y0 + (r.height() - t) / 2;
+    const int x0 = r.x0 + kTextPad, x1 = r.x1 - kTextPad;
+    const int on = line == LineStyle::Dots ? t : line == LineStyle::Dashes ? std::max(3 * t, 18) : x1 - x0;
+    const int off = line == LineStyle::Dots ? std::max(t, 8) : std::max(t, 10);
+    for (int x = x0; x < x1; x += on + off) c.fill(IRect{x, y, std::min(x + on, x1), y + t}.intersected(clip), ink);
+}
 
 const char* label(Action a) {
     switch (a) {
@@ -81,8 +95,9 @@ void ToolPanel::layout() {
 
     std::vector<Action> opts(std::begin(kSizes), std::end(kSizes));
     if (options_ == Action::Eraser) opts.insert(opts.end(), {Action::ErasePartial, Action::EraseWhole});
+    if (options_ == Action::Pen) opts.insert(opts.end(), std::begin(kLines), std::end(kLines));
     const int m = static_cast<int>(opts.size());
-    const int modesGap = m > 3 ? 2 * kGap : 0;  // the eraser's modes, set apart from its sizes
+    const int modesGap = m > 3 ? 2 * kGap : 0;  // the eraser's modes and the pen's lines, set apart from the sizes
     const int w = textWidth("PARTIAL") + 2 * kTextPad + 2 * kPad;
     const int h = 2 * kPad + m * kButtonH + (m - 1) * kGap + modesGap;
     // Level with the tool's button, as far as the page allows.
@@ -143,6 +158,8 @@ void ToolPanel::draw(Canvas& c, const ToolPanelState& s, const IRect& clip) cons
         if (size != std::end(kSizes)) on = size - std::begin(kSizes) == static_cast<int>(s.size);
         if (b.action == Action::ErasePartial) on = !s.eraseWhole;
         if (b.action == Action::EraseWhole) on = s.eraseWhole;
+        const bool lineButton = std::find(std::begin(kLines), std::end(kLines), b.action) != std::end(kLines);
+        if (lineButton) on = lineOf(b.action) == s.line;
         box(b.r, on);
         const uint8_t ink = on ? 255 : 0;
 
@@ -156,11 +173,13 @@ void ToolPanel::draw(Canvas& c, const ToolPanelState& s, const IRect& clip) cons
             font.draw(c, b.r.x0 + (b.r.width() - w) / 2, b.r.y0 + (b.r.height() - font.lineHeight() * px) / 2, sample, 0,
                       sample.size(), px, ink, b.r.intersected(clip), false);
         } else if (size != std::end(kSizes)) {
-            // A sample of the line it draws, as thick as on the page (within reason).
+            // A sample of the line it draws, as thick as on the page (within reason), and
+            // for the pen dotted or dashed like it.
             const double px = s.widthsPx[static_cast<size_t>(size - std::begin(kSizes))];
             const int t = std::clamp(static_cast<int>(std::lround(px)), 2, b.r.height() - 2 * kTextPad);
-            const int y = b.r.y0 + (b.r.height() - t) / 2;
-            fill({b.r.x0 + kTextPad, y, b.r.x1 - kTextPad, y + t}, ink);
+            drawSampleLine(c, b.r, t, s.tool == Action::Pen ? s.line : LineStyle::Solid, ink, clip);
+        } else if (lineButton) {
+            drawSampleLine(c, b.r, 6, lineOf(b.action), ink, clip);
         } else if (b.action == Action::ZoomOut || b.action == Action::ZoomIn) {
             // Drawn rather than lettered: the font's "-" is a hairline.
             const int cx = (b.r.x0 + b.r.x1) / 2, cy = (b.r.y0 + b.r.y1) / 2, arm = 16, half = 3;

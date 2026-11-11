@@ -58,6 +58,7 @@ struct EditorOptions {
     bool fromList = false;
     bool eraseWholeStrokes = false;  // eraser mode to start in
     bool recognizeShapes = false;    // pen mode to start in (SHAPE rather than PEN)
+    LineStyle penLine = LineStyle::Solid;
     // pen, highlighter, eraser, text
     std::array<ToolSize, 4> sizes{ToolSize::Medium, ToolSize::Medium, ToolSize::Medium, ToolSize::Medium};
     int toolbarHeight = 120;
@@ -89,6 +90,7 @@ public:
     bool modified() const { return modified_; }
     bool eraseWholeStrokes() const { return eraseWhole_; }
     bool recognizeShapes() const { return shapes_; }
+    LineStyle penLine() const { return line_; }
     ToolSize toolSize(ToolKind t) const {
         return t == ToolKind::Lasso || t == ToolKind::Pan ? ToolSize::Medium : sizes_[static_cast<size_t>(t)];
     }
@@ -323,6 +325,7 @@ private:
     std::array<ToolSize, 4> sizes_;  // indexed by ToolKind
     bool eraseWhole_ = false;  // eraser removes whole strokes instead of cutting them
     bool shapes_ = false;      // pen strokes are recognized as shapes
+    LineStyle line_ = LineStyle::Solid;  // the pen draws solid, dotted or dashed lines
     // Lines recognized one after another, which may still close into a polygon or
     // get an arrowhead. They are the last `lines` elements of the layer.
     struct ShapeChain {

@@ -29,7 +29,11 @@ struct Stroke {
     // Pressure-adjusted width of each segment (points[i] -> points[i+1]).
     // Empty for constant-width strokes, otherwise exactly points.size() - 1 entries.
     std::vector<double> segmentWidths;
-    // Attributes we don't interpret (capStyle, fill, style, audio...), written back as-is.
+    // A dotted or dashed line, as in Xournal++'s style attribute: lengths along the
+    // stroke in points, inked and blank in turn (with round ends, a short dash is a
+    // dot). Empty: a solid line.
+    std::vector<double> dashes;
+    // Attributes we don't interpret (capStyle, fill, audio...), written back as-is.
     std::vector<std::pair<std::string, std::string>> extraAttrs;
 
     double segmentWidth(size_t i) const { return segmentWidths.empty() ? width : segmentWidths[i]; }

@@ -9,11 +9,13 @@
 namespace scrible {
 
 enum class ToolSize { Fine, Medium, Thick };
+enum class LineStyle { Solid, Dots, Dashes };  // the pen's
 
 struct ToolPanelState {
     Action tool = Action::Pen;  // Pen, Highlighter, Eraser, Text, Lasso or Pan
     bool shapes = false;
     bool eraseWhole = false;
+    LineStyle line = LineStyle::Solid;
     // The current tool's size, and its preset widths in screen pixels (shown as samples);
     // for TEXT, its font sizes.
     ToolSize size = ToolSize::Medium;
@@ -23,7 +25,8 @@ struct ToolPanelState {
 // The drawing tools, kept out of the way along the left edge of the page: a small
 // tab with an arrow, which opens a column of PEN, SHAPE, SELECT, MARK, ERASE, TEXT and
 // PAN, then zoom out / in and FIT. Picking the pen, highlighter, eraser or text shows its
-// options beside the column (sizes; for the eraser also partial or whole strokes). Strictly black and
+// options beside the column (sizes; for the pen also solid, dotted or dashed lines, and
+// for the eraser partial or whole strokes). Strictly black and
 // white, like the toolbar, so it can be shown with the fast DU waveform.
 class ToolPanel {
 public:

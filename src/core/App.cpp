@@ -49,6 +49,8 @@ bool App::openNotebook(const std::string& path, std::string& error) {
         eo.digitExamplesPath = opts_.notebooksDir + "/.scrible-digits";
         eo.eraseWholeStrokes = settings_->get("eraser") == "stroke";
         eo.recognizeShapes = settings_->get("shapes") == "on";
+        const std::string line = settings_->get("pen-line");
+        eo.penLine = line == "dots" ? LineStyle::Dots : line == "dashes" ? LineStyle::Dashes : LineStyle::Solid;
         for (size_t k = 0; k < eo.sizes.size(); ++k)
             for (int i = 0; i < 3; ++i)
                 if (settings_->get(kSizeKeys[k]) == kSizeNames[i]) eo.sizes[k] = static_cast<ToolSize>(i);
@@ -89,6 +91,8 @@ void App::afterEditorInput() {
     if (settings_) {
         settings_->set("eraser", editor_->eraseWholeStrokes() ? "stroke" : "partial");
         settings_->set("shapes", editor_->recognizeShapes() ? "on" : "off");
+        const LineStyle line = editor_->penLine();
+        settings_->set("pen-line", line == LineStyle::Dots ? "dots" : line == LineStyle::Dashes ? "dashes" : "solid");
         for (size_t k = 0; k < std::size(kSizeKeys); ++k)
             settings_->set(kSizeKeys[k], kSizeNames[static_cast<int>(editor_->toolSize(static_cast<ToolKind>(k)))]);
     }

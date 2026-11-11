@@ -3074,6 +3074,130 @@ struct TypingRig {
 
 }  // namespace
 
+TEST(dotted_and_dashed_strokes_load_and_save_like_xournalpp) {
+    const char* xml = R"(<xournal fileversion="4"><page width="200" height="200"><layer>
+<stroke tool="pen" color="#000000ff" width="1.41" style="dot">10 10 100 10</stroke>
+<stroke tool="pen" color="#000000ff" width="1.41" style="dashdot">10 20 100 20</stroke>
+<stroke tool="pen" color="#000000ff" width="1.41" style="cust: 1.50 2.25">10 30 100 30</stroke>
+<stroke tool="pen" color="#000000ff" width="1.41" style="wavy">10 40 100 40</stroke>
+<stroke tool="pen" color="#000000ff" width="1.41" style="plain">10 50 100 50</stroke>
+</layer></page></xournal>)";
+    Document d;
+    std::string err;
+    CHECK(parseXopp(xml, d, err));
+    const auto& els = d.pages[0].layers[0].elements;
+    auto dashes = [&](size_t i) { return std::get<Stroke>(els.at(i)).dashes; };
+    CHECK((dashes(0) == std::vector<double>{0.5, 3}));
+    CHECK((dashes(1) == std::vector<double>{6, 3, 0.5, 3}));
+    CHECK((dashes(2) == std::vector<double>{1.5, 2.25}));
+    CHECK(dashes(3).empty() && dashes(4).empty());
+    const std::string out = serializeXopp(d);
+    CHECK(out.find("style=\"dot\"") != std::string::npos);
+    CHECK(out.find("style=\"dashdot\"") != std::string::npos);
+    CHECK(out.find("style=\"cust: 1.50 2.25\"") != std::string::npos);
+    CHECK(out.find("style=\"wavy\"") != std::string::npos);  // not ours: kept as it was
+    // Solid: no style, as Xournal++ writes it.
+    const size_t last = out.rfind("<stroke");
+    CHECK(out.substr(last, out.find('>', last) - last).find("style") == std::string::npos);
+    Document d2;
+    CHECK(parseXopp(out, d2, err));
+    CHECK(serializeXopp(d2) == out);
+}
+
+TEST(dotted_lines_draw_dots_the_same_live_and_final) {
+    const RenderStyle hard{false};
+    PageTransform t;
+    t.scale = 300.0 / 72.0;
+    const int w = static_cast<int>(120 * t.scale), h = static_cast<int>(40 * t.scale);
+    // The ink along the middle of a straight line: runs of it, and the longest run.
+    auto runs = [&](const Canvas& c, int y, int& longest) {
+        int n = 0, run = 0;
+        longest = 0;
+        for (int x = 0; x < w; ++x) {
+            if (c.at(x, y) == 0) {
+                if (!run++) ++n;
+                longest = std::max(longest, run);
+            } else {
+                run = 0;
+            }
+        }
+        return n;
+    };
+    for (const std::vector<double>& pattern : {std::vector<double>{0.5, 3}, std::vector<double>{6, 3}}) {
+        Page p = makeBlankPage(120, 40, "plain");
+        Stroke s;
+        s.width = 1.41;
+        s.dashes = pattern;
+        // A line in uneven steps, so dashes fall across segments.
+        for (double x = 10; x <= 110; x += 1.7) s.points.push_back({x, 20});
+        Canvas live(w, h), final(w, h);
+        for (size_t i = 0; i + 1 < s.points.size(); ++i) drawLiveSegment(live, s, i, t, live.rect(), hard);
+        p.layers[0].elements.push_back(s);
+        drawPage(final, p, t, final.rect(), hard);
+        int differing = 0;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) differing += live.at(x, y) != final.at(x, y);
+        CHECK(differing == 0);
+        int longest = 0;
+        const int n = runs(final, static_cast<int>(20 * t.scale), longest);
+        const double period = pattern[0] + pattern[1];
+        CHECK(std::abs(n - static_cast<int>(std::ceil(98.6 / period))) <= 1);
+        CHECK_NEAR(longest, (pattern[0] + s.width) * t.scale, 3);  // a dash, with its round ends
+    }
+    // A dot (a stroke that didn't move) still shows.
+    Page p = makeBlankPage(120, 40, "plain");
+    Stroke dot;
+    dot.width = 1.41;
+    dot.dashes = {6, 3};
+    dot.points = {{50, 20}, {50, 20}};
+    p.layers[0].elements.push_back(dot);
+    Canvas c(w, h);
+    drawPage(c, p, t, c.rect(), hard);
+    CHECK(c.at(static_cast<int>(50 * t.scale), static_cast<int>(20 * t.scale)) == 0);
+}
+
+TEST(the_pen_draws_dotted_and_dashed_lines) {
+    EditorOptions o;
+    o.render.antialias = false;
+    const std::string path = tempPath("dotted.xopp");
+    Editor e(1200, 1600, Document{}, path, o);
+    const auto& els = e.document().pages[0].layers.back().elements;
+    uint64_t t = 1000;
+    auto line = [&](double y) {
+        e.penDown({200, y, 0.5, false}, t += 10);
+        for (int x = 210; x <= 800; x += 10) e.penMove({double(x), y, 0.5, false}, t += 10);
+        e.penUp(t += 10);
+        return std::get<Stroke>(els.back());
+    };
+    CHECK(line(300).dashes.empty());
+    e.perform(Action::LineDots, t += 10);
+    CHECK(e.penLine() == LineStyle::Dots && e.tool() == ToolKind::Pen);
+    CHECK((line(400).dashes == std::vector<double>{0.5, 3}));
+    e.perform(Action::LineDashes, t += 10);
+    CHECK((line(500).dashes == std::vector<double>{6, 3}));
+    // A thicker pen spaces them out, or they'd run together.
+    e.perform(Action::SizeThick, t += 10);
+    const Stroke thick = line(600);
+    CHECK(thick.dashes.size() == 2 && thick.dashes[0] > 6 && thick.dashes[1] > 3);
+    // The side button highlights, solid as ever.
+    e.penDown({200, 700, 0.5, false, true}, t += 10);
+    e.penMove({600, 700, 0.5, false, true}, t += 10);
+    e.penUp(t += 10);
+    CHECK(std::get<Stroke>(els.back()).dashes.empty());
+    // Shapes keep the line's style.
+    e.perform(Action::LineDots, t += 10);
+    e.perform(Action::Shapes, t += 10);
+    const size_t before = els.size();
+    line(800);
+    CHECK(els.size() == before + 1 && std::get<Stroke>(els.back()).points.size() == 2);
+    CHECK(!std::get<Stroke>(els.back()).dashes.empty());
+    CHECK(e.save(t += 10, true));
+    Document d;
+    std::string err;
+    CHECK(loadXopp(path, d, err));
+    CHECK((std::get<Stroke>(d.pages[0].layers.back().elements.at(1)).dashes == std::vector<double>{0.5, 3}));
+}
+
 TEST(text_tool_types_on_the_page) {
     TypingRig r("typing.xopp");
     Editor& e = r.e;

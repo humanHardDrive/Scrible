@@ -14,7 +14,7 @@ enum class Action {
     // the selection's menu: EditMenu (Delete, Duplicate) and MathMenu (the Math ones,
     // on the numbers written in it); Cancel lets go of it
     Tools, Pen, Shapes, Lasso, Highlighter, Eraser, Text, Pan, ZoomOut, ZoomIn, ZoomFit,
-    SizeFine, SizeMedium, SizeThick, ErasePartial, EraseWhole,
+    SizeFine, SizeMedium, SizeThick, ErasePartial, EraseWhole, LineSolid, LineDots, LineDashes,
     EditMenu, MathMenu, MathSum, MathAverage, MathMin, MathMax, MathCount,
     Undo, Redo, Save,
     // editor: the notebook's name, tapped to see it whole (and tapped again to go back)

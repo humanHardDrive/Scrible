@@ -24,6 +24,9 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 - Pen with pressure, highlighter (also the pen's side button), and an eraser (also the
   pen's eraser end) that either cuts away just the ink it passes over, like Xournal++'s
   standard eraser, or removes whole strokes
+- Solid, dotted or dashed lines for the pen (shapes too), saved the way Xournal++ saves
+  them, so they look the same on the desktop; dotted and dashed lines from Xournal++
+  show as they are
 - Typed text: tap the page with TEXT and type on an on-screen keyboard, or tap a text
   (from Scrible or desktop Xournal++) to edit it. Drawn in DejaVu Sans, built in, which
   is Xournal++'s usual "Sans" on Linux
@@ -124,7 +127,7 @@ In a notebook the toolbar along the top has UNDO / REDO, the notebook's name
 PAGE, `<` page `>`, SAVE, BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
 page. Tap it to open a column of PEN, SHAPE, SELECT, MARK (highlighter), ERASE, TEXT and
 PAN, then zoom buttons. PEN, MARK, ERASE and TEXT show their sizes beside the column, and
-each keeps its own. Picking one
+each keeps its own; PEN also has SOLID, DOTS and DASHES below its sizes. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
 Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
 rest on the page. Buttons invert for a moment when pressed, to show they were hit.
