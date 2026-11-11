@@ -11,18 +11,19 @@ namespace scrible {
 enum class ToolSize { Fine, Medium, Thick };
 
 struct ToolPanelState {
-    Action tool = Action::Pen;  // Pen, Highlighter, Eraser, Lasso or Pan
+    Action tool = Action::Pen;  // Pen, Highlighter, Eraser, Text, Lasso or Pan
     bool shapes = false;
     bool eraseWhole = false;
-    // The current tool's size, and its preset widths in screen pixels (shown as samples).
+    // The current tool's size, and its preset widths in screen pixels (shown as samples);
+    // for TEXT, its font sizes.
     ToolSize size = ToolSize::Medium;
     std::array<double, 3> widthsPx{};
 };
 
 // The drawing tools, kept out of the way along the left edge of the page: a small
-// tab with an arrow, which opens a column of PEN, SHAPE, SELECT, MARK, ERASE and PAN,
-// then zoom out / in and FIT. Picking the pen, highlighter or eraser shows its options beside the
-// column (sizes; for the eraser also partial or whole strokes). Strictly black and
+// tab with an arrow, which opens a column of PEN, SHAPE, SELECT, MARK, ERASE, TEXT and
+// PAN, then zoom out / in and FIT. Picking the pen, highlighter, eraser or text shows its
+// options beside the column (sizes; for the eraser also partial or whole strokes). Strictly black and
 // white, like the toolbar, so it can be shown with the fast DU waveform.
 class ToolPanel {
 public:
@@ -31,7 +32,7 @@ public:
     bool open() const { return open_; }
     Action options() const { return options_; }  // the tool whose options are showing, or None
     void setOpen(bool open);                     // closing also puts the options away
-    void showOptions(Action tool);               // Pen, Highlighter or Eraser; opens the column too
+    void showOptions(Action tool);               // Pen, Highlighter, Eraser or Text; opens the column too
 
     // What it covers right now: the tab, or the column and the options beside it.
     std::vector<IRect> rects() const;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
+#include <iterator>
 
 #include "XoppFile.h"
 
@@ -12,7 +13,7 @@ namespace scrible {
 namespace {
 
 // Settings keys for the size of each tool, indexed by ToolKind, and their values.
-constexpr const char* kSizeKeys[] = {"pen-size", "highlighter-size", "eraser-size"};
+constexpr const char* kSizeKeys[] = {"pen-size", "highlighter-size", "eraser-size", "text-size"};
 constexpr const char* kSizeNames[] = {"fine", "medium", "thick"};
 
 }  // namespace
@@ -88,7 +89,7 @@ void App::afterEditorInput() {
     if (settings_) {
         settings_->set("eraser", editor_->eraseWholeStrokes() ? "stroke" : "partial");
         settings_->set("shapes", editor_->recognizeShapes() ? "on" : "off");
-        for (size_t k = 0; k < 3; ++k)
+        for (size_t k = 0; k < std::size(kSizeKeys); ++k)
             settings_->set(kSizeKeys[k], kSizeNames[static_cast<int>(editor_->toolSize(static_cast<ToolKind>(k)))]);
     }
     if (!editor_->closeRequested()) return;
@@ -168,6 +169,12 @@ void App::perform(Action a, uint64_t now) {
     } else if (!deferred_) {
         handle(library_->perform(a), now);
     }
+}
+
+void App::type(const std::string& s, uint64_t now) {
+    if (!editor_) return;
+    editor_->type(s, now);
+    afterEditorInput();
 }
 
 void App::onIdle(uint64_t now) {

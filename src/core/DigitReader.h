@@ -60,6 +60,11 @@ struct ReadNumber {
     bool parse(double& value) const;
 };
 
+// The number a typed line starts with, spelled as ReadNumber spells them ("-1,250.5";
+// ".5" becomes "0.5"). Read like strtod: spaces before it are skipped, and whatever
+// follows it is ignored, so "12 apples" is 12. Empty if the line doesn't start with one.
+std::string typedNumber(const std::string& line);
+
 // Numbers written in `strokes`: one or more per line, lines top to bottom, each left
 // to right. `strokes` is in the order they were written.
 std::vector<ReadNumber> readNumbers(const std::vector<Stroke>& strokes, const DigitReader& reader);

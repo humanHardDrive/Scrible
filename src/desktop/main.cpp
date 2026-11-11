@@ -11,9 +11,10 @@
 // button); the wheel moves the page, and zooms with Cmd/Ctrl. A drawing tablet
 // gets real pressure.
 // Keys: Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, Cmd/Ctrl+S save,
-//       P/H/E/L pen/highlighter/eraser/lasso, 1/2/3 sizes, Delete removes the selection,
+//       P/H/E/L/T pen/highlighter/eraser/lasso/text, 1/2/3 sizes, Delete removes the selection,
 //       Left/Right pages,
 //       N new notebook (in the list), Esc back/quit.
+//       While typing with the TEXT tool, keys type instead, and Esc is done.
 
 #include <SDL3/SDL.h>
 
@@ -70,6 +71,7 @@ public:
         texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
         if (!texture_) return fail("SDL_CreateTexture");
         SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_LINEAR);
+        SDL_StartTextInput(window_);  // for the TEXT tool
         return true;
     }
 
@@ -213,9 +215,18 @@ int main(int argc, char** argv) {
                     break;
                 case SDL_EVENT_PEN_UP: app.penUp(now); break;
 
+                case SDL_EVENT_TEXT_INPUT:
+                    if (app.typing()) app.type(ev.text.text, now);
+                    break;
                 case SDL_EVENT_KEY_DOWN: {
                     const bool cmd = ev.key.mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL);
                     const bool shift = ev.key.mod & SDL_KMOD_SHIFT;
+                    if (app.typing() && !cmd) {  // the letters come as text input
+                        if (ev.key.key == SDLK_BACKSPACE) app.type("\b", now);
+                        if (ev.key.key == SDLK_RETURN) app.type("\n", now);
+                        if (ev.key.key == SDLK_ESCAPE) app.perform(scrible::Action::Confirm, now);
+                        break;
+                    }
                     scrible::Action a = scrible::Action::None;
                     switch (ev.key.key) {
                         case SDLK_Z: if (cmd) a = shift ? scrible::Action::Redo : scrible::Action::Undo; break;
@@ -225,6 +236,7 @@ int main(int argc, char** argv) {
                         case SDLK_H: a = scrible::Action::Highlighter; break;
                         case SDLK_E: a = scrible::Action::Eraser; break;
                         case SDLK_L: a = scrible::Action::Lasso; break;
+                        case SDLK_T: a = scrible::Action::Text; break;
                         case SDLK_R: a = scrible::Action::Shapes; break;
                         case SDLK_DELETE:
                         case SDLK_BACKSPACE: a = scrible::Action::Delete; break;

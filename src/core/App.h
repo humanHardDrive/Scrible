@@ -53,6 +53,9 @@ public:
     void zoomBy(double factor, double x, double y, uint64_t now);
     void panBy(double dx, double dy, uint64_t now);
     void perform(Action a, uint64_t now);  // keyboard shortcuts
+    // Typing on the page with the TEXT tool, from a real keyboard (see Editor::type).
+    bool typing() const { return editor_ && editor_->typing(); }
+    void type(const std::string& s, uint64_t now);
 
     void onIdle(uint64_t now);
     int msUntilIdleWork(uint64_t now) const;  // -1 when nothing is scheduled

@@ -12,6 +12,8 @@
 
 #include <pugixml.hpp>
 
+#include "Font.h"
+
 #ifndef SCRIBLE_VERSION
 #define SCRIBLE_VERSION "dev"
 #endif
@@ -157,12 +159,12 @@ ForeignElement parseForeign(const pugi::xml_node& n) {
             start = end + 1;
         }
         if (!parseColor(n.attribute("color").as_string("black"), f.color, kStrokeColors)) f.color = 0;
-        // The box the bitmap-font rendering occupies (not the real font's metrics).
-        const std::vector<std::string> lines = textLines(f);
-        size_t longest = 0;
-        for (const auto& l : lines) longest = std::max(longest, codePoints(l));
+        const Font& font = Font::sans();
+        const std::vector<TextLine> lines = font.layout(f.text, f.textSize, f.textWrap);
+        double widest = 0;
+        for (const TextLine& l : lines) widest = std::max(widest, l.width);
         f.bounds.add(f.textX, f.textY);
-        f.bounds.add(f.textX + longest * f.textSize, f.textY + lines.size() * f.textSize * 1.25);
+        f.bounds.add(f.textX + widest, f.textY + lines.size() * font.lineHeight() * f.textSize);
     }
     return f;
 }
@@ -255,6 +257,28 @@ ForeignElement answerElement(const std::string& op, const std::vector<std::strin
     pugi::xml_document d;
     d.load_string(xml.c_str());
     return parseForeign(d.first_child());
+}
+
+ForeignElement textElement(const ForeignElement* base, const std::string& text, double x, double y, double size) {
+    pugi::xml_document d;
+    pugi::xml_node n;
+    if (base && base->tag == "text" && d.load_string(base->xml.c_str()) && d.first_child()) {
+        n = d.first_child();
+        n.remove_attribute("matrix");  // its scale is in the size; rotation isn't kept
+        while (n.first_child()) n.remove_child(n.first_child());
+    } else {
+        n = d.append_child("text");
+        n.append_attribute("font") = "Sans";
+        n.append_attribute("color") = "#000000ff";
+    }
+    std::string v;
+    for (auto [name, value] : {std::pair<const char*, double>{"size", size}, {"x", x}, {"y", y}}) {
+        v.clear();
+        appendNumber(v, value, 2);
+        (n.attribute(name) ? n.attribute(name) : n.append_attribute(name)) = v.c_str();
+    }
+    n.append_child(pugi::node_pcdata).set_value(text.c_str());
+    return parseForeign(n);
 }
 
 bool parseXopp(const std::string& xml, Document& doc, std::string& error, std::vector<std::string>* warnings) {

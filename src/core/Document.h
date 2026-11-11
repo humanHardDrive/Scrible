@@ -49,7 +49,7 @@ struct ForeignElement {
     std::string tag;
     std::string xml;
     RectF bounds;
-    // For <text>: enough to draw it roughly with the bitmap font.
+    // For <text>: what's needed to draw it (see Font).
     std::string text;
     double textSize = 0;
     double textWrap = 0;  // wrap width in points, 0 = no wrapping
@@ -65,9 +65,6 @@ struct ForeignElement {
     std::vector<std::vector<std::array<uint8_t, 16>>> mathShapes;
 };
 
-// Lines of a <text> element as drawn with the bitmap font: one glyph per code point,
-// each about `textSize` points wide, greedily word-wrapped at `textWrap`.
-std::vector<std::string> textLines(const ForeignElement& f);
 size_t codePoints(const std::string& s);
 
 using Element = std::variant<Stroke, ForeignElement>;

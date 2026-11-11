@@ -3,6 +3,7 @@
 #include <cmath>
 #include <vector>
 
+#include "Font.h"
 #include "Paper.h"
 
 namespace scrible {
@@ -162,22 +163,19 @@ void drawBackground(Canvas& c, const Page& p, const PageTransform& t, const IRec
     // Other styles (isometric, staves, ...) are drawn plain for now.
 }
 
-void drawForeign(Canvas& c, const ForeignElement& f, const PageTransform& t, const IRect& clip) {
+void drawForeign(Canvas& c, const ForeignElement& f, const PageTransform& t, const IRect& clip, const RenderStyle& style) {
     if (!f.bounds.valid) return;
     const IRect r = t.toScreen(f.bounds);
     if (r.intersected(clip).empty()) return;
 
     if (f.tag == "text") {
-        // Approximation with the bitmap font, so typed notes from the desktop are at least legible.
-        // Clipped to the element's bounds so partial repaints stay consistent.
-        const int scale = std::max(1, static_cast<int>(std::lround(f.textSize * t.scale / 8.0)));
-        const double lineStep = f.textSize * 1.25 * t.scale;
-        const int x = static_cast<int>(std::lround(t.toScreenX(f.textX)));
-        const double y = t.toScreenY(f.textY);
-        const std::vector<std::string> lines = textLines(f);
+        // Whatever its font, in Sans. Clipped to the element's bounds so partial repaints stay consistent.
+        const Font& font = Font::sans();
+        const double px = f.textSize * t.scale;
+        const std::vector<TextLine> lines = font.layout(f.text, f.textSize, f.textWrap);
         for (size_t i = 0; i < lines.size(); ++i)
-            c.drawText(x, static_cast<int>(std::lround(y + i * lineStep)), lines[i], scale, luminance(f.color),
-                       clip.intersected(r));
+            font.draw(c, t.toScreenX(f.textX), t.toScreenY(f.textY) + i * font.lineHeight() * px, f.text,
+                      lines[i].begin, lines[i].end, px, luminance(f.color), clip.intersected(r), style.antialias);
         return;
     }
 
@@ -235,7 +233,7 @@ void drawPage(Canvas& c, const Page& page, const PageTransform& t, const IRect& 
                 const RectF b = s->bounds();
                 if (b.intersects(visible)) drawStrokeIn(c, *s, b, t, cl, style);
             } else {
-                drawForeign(c, std::get<ForeignElement>(e), t, cl);
+                drawForeign(c, std::get<ForeignElement>(e), t, cl, style);
             }
         }
     }

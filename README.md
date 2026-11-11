@@ -14,7 +14,7 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 
 - A notebook list: name notebooks with an on-screen keyboard; rename, duplicate,
   delete (into a Trash folder); sort by date or by name
-- Selection: move, resize, duplicate and delete groups of strokes, or read the numbers
+- Selection: move, resize, duplicate and delete groups of strokes and texts, or read the numbers
   written in them and get their sum, average, minimum, maximum or count
 - Paper for each page: blank, ruled (three spacings, with or without a margin line) or
   grid (three sizes), stored the way Xournal++ stores it
@@ -24,13 +24,16 @@ and reads the pen from evdev, sharing Xournal++'s file format.
 - Pen with pressure, highlighter (also the pen's side button), and an eraser (also the
   pen's eraser end) that either cuts away just the ink it passes over, like Xournal++'s
   standard eraser, or removes whole strokes
+- Typed text: tap the page with TEXT and type on an on-screen keyboard, or tap a text
+  (from Scrible or desktop Xournal++) to edit it. Drawn in DejaVu Sans, built in, which
+  is Xournal++'s usual "Sans" on Linux
 - Drawing tools tucked into a panel at the edge of the page, out of the way until tapped
 - Zoom up to 400%: pinch with two fingers, or use the panel's buttons and PAN tool
 - Three sizes per tool, undo/redo, multiple pages (`>` on the last page adds one;
   PAGE deletes one)
 - Opens `.xopp` and `.xoj` files from Xournal++ and the original Xournal. Anything it
-  can't edit yet (text, images, LaTeX, PDF backgrounds, unknown attributes) is kept and
-  written back unchanged. Text is drawn roughly with a bitmap font; images show as boxes.
+  can't edit yet (images, LaTeX, PDF backgrounds, unknown attributes) is kept and
+  written back unchanged. Text is drawn in Sans whatever its font; images show as boxes.
 - Autosaves 30 s after a change once the pen rests, on sleep and on exit. Saves are atomic.
 - Live ink uses the Scribe's DU "pen mode"; once the pen rests the region is redrawn in
   full grayscale.
@@ -119,24 +122,27 @@ In the list:
 In a notebook the toolbar along the top has UNDO / REDO, the notebook's name
 (shortened to fit; tap it to see it whole across the bar, and tap the bar to go back),
 PAGE, `<` page `>`, SAVE, BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
-page. Tap it to open a column of PEN, SHAPE, SELECT, MARK (highlighter), ERASE and PAN,
-then zoom buttons. PEN, MARK and ERASE show their sizes beside the column, and each
-keeps its own. Picking one
+page. Tap it to open a column of PEN, SHAPE, SELECT, MARK (highlighter), ERASE, TEXT and
+PAN, then zoom buttons. PEN, MARK, ERASE and TEXT show their sizes beside the column, and
+each keeps its own. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
 Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
 rest on the page. Buttons invert for a moment when pressed, to show they were hit.
 
-- SELECT: draw a loop around strokes to select those mostly inside it. Drag inside the
-  dashed frame to move them, or drag the corner handle to resize (line widths scale
-  too). The selection's menu has EDIT and MATH. Tapping one puts it at the start of
+- SELECT: draw a loop around strokes and texts to select those mostly inside it. Drag
+  inside the dashed frame to move them, or drag the corner handle to resize (line widths
+  and text sizes scale too). The selection's menu has EDIT and MATH. Tapping one puts it at the start of
   the row, with an up arrow, followed by its options; tap it again to go back. A tap
   elsewhere lets go of the selection. Each change is one UNDO. It
-  works on the top layer's strokes; text and images from desktop Xournal++ can't be
+  works on the top layer's strokes and texts; images from desktop Xournal++ can't be
   selected yet.
 - EDIT: DELETE and DUPLICATE.
 - MATH: SUM, AVERAGE, MIN, MAX and COUNT. Select a list of numbers you've written (one
   per line, or several on a line with a wide gap between; on any paper, blank too), and
-  Scrible reads them and puts the answer on the page below them, as text. Drag it
+  Scrible reads them and puts the answer on the page below them, as text. Typed texts
+  in the selection count too, read exactly as typed rather than recognized: each line
+  that starts with a number is one ("12 apples" is 12), and other lines, like headings,
+  are left out. Earlier answers are typed text too, so subtotals can be added up. Drag it
   anywhere with the pen (any tool but the eraser, which erases it). The little i beside it shows the numbers it was
   worked out from, as they were read; tap a character that was misread to correct it,
   and the answer follows. DELETE there removes the answer. It knows digits, decimal
@@ -154,7 +160,18 @@ rest on the page. Buttons invert for a moment when pressed, to show they were hi
   else (handwriting, mostly) stays as drawn. If a shape was guessed wrong, one UNDO
   brings back what you drew.
 - ERASE also offers PARTIAL, which cuts away just what you erase, and WHOLE, which
-  removes whole strokes. The pen's eraser end follows the same setting.
+  removes whole strokes. The pen's eraser end follows the same setting. Text goes
+  whole as soon as the eraser touches it.
+- TEXT: tap the page with the pen where the text should go, and a keyboard comes up
+  along the bottom of the screen (or the top, if the text is low on the page). Type
+  with your fingers or the pen; SHIFT gives one capital, ?123 the symbols, and ENTER a
+  new line. Lines that reach the page's right edge break by themselves. Tap in the text
+  to move the caret, tap a text to edit it, or tap elsewhere to start another. Drag a
+  text with the pen to move it, with any tool but the eraser (with TEXT, a tap types in
+  it and a drag moves it, even while you're typing it); each move is one UNDO. DONE (or
+  any other tool) finishes; a text left empty goes. Each text you type or edit is one
+  UNDO. Its sizes are 10, 14 and 20 pt; picking one while typing resizes that text.
+  Texts from desktop Xournal++ keep their font and color in the file.
 - Holding the pen's side button highlights, whichever tool is selected, as in the
   Kindle's own notebooks. It uses MARK's size.
 - These choices and each tool's size are remembered.

@@ -27,6 +27,11 @@ std::string serializeXopp(const Document& doc);
 
 // A math answer as a text element: `text` at (x, y), `size` points tall, recording
 // the function and the numbers it was worked out from (see ForeignElement).
+// A text element: `text` with its top left at (x, y), `size` points. Made from `base`
+// (a text read from a file) when given, keeping its other attributes, such as its
+// font and color; otherwise black Sans.
+ForeignElement textElement(const ForeignElement* base, const std::string& text, double x, double y, double size);
+
 ForeignElement answerElement(const std::string& op, const std::vector<std::string>& numbers, const std::string& text,
                              double x, double y, double size);
 

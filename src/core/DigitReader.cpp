@@ -200,6 +200,32 @@ bool ReadNumber::parse(double& value) const {
     return true;
 }
 
+std::string typedNumber(const std::string& line) {
+    size_t i = line.find_first_not_of(" \t");
+    if (i == std::string::npos) return {};
+    std::string sign;
+    if (line[i] == '-' || line[i] == '+') sign = line[i++] == '-' ? "-" : "";
+    // The longest run of digits, commas and one decimal point, without a comma or point at its end.
+    std::string run;
+    for (bool point = false; i < line.size(); ++i) {
+        const char c = line[i];
+        if (c == '.' && point) break;
+        if (!std::isdigit(static_cast<unsigned char>(c)) && c != ',' && c != '.') break;
+        point = point || c == '.';
+        run += c;
+    }
+    while (!run.empty() && (run.back() == ',' || run.back() == '.')) run.pop_back();
+    if (!run.empty() && run[0] == '.') run = "0" + run;
+    if (run.empty() || run[0] == ',') return {};
+    ReadNumber n;
+    for (char c : sign + run) n.chars.push_back({c, {}, {}, {}});
+    double v;
+    if (n.parse(v)) return sign + run;
+    // Commas that aren't thousands: the number ends at the first, as for strtod.
+    run.resize(run.find(','));
+    return sign + run;
+}
+
 std::vector<ReadNumber> readNumbers(const std::vector<Stroke>& strokes, const DigitReader& reader) {
     const size_t n = strokes.size();
     if (n == 0) return {};
