@@ -71,6 +71,8 @@ public:
         texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
         if (!texture_) return fail("SDL_CreateTexture");
         SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_LINEAR);
+        w_ = w;
+        h_ = h;
         SDL_StartTextInput(window_);  // for the TEXT tool
         return true;
     }
@@ -82,7 +84,27 @@ public:
         SDL_Quit();
     }
 
+    // The app turned its screen (ROTATE): the window takes the new shape, at the same
+    // scale. Unlike the Kindle's panel, it doesn't have to stay the way it was.
+    bool reshape(int w, int h) {
+        if (w == w_ && h == h_) return true;
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(window_, &ww, &wh);
+        const float scale = std::min(float(ww) / w_, float(wh) / h_);
+        if (panel_) panel_ = std::make_unique<scrible::EinkPanel>(w, h);
+        if (texture_) SDL_DestroyTexture(texture_);
+        texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+        if (!texture_) return fail("SDL_CreateTexture");
+        SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_LINEAR);
+        SDL_SetRenderLogicalPresentation(renderer_, w, h, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        SDL_SetWindowSize(window_, static_cast<int>(w * scale), static_cast<int>(h * scale));
+        w_ = w;
+        h_ = h;
+        return true;
+    }
+
     void present(const scrible::Canvas& c, const std::vector<scrible::Damage>& damage) {
+        if (!reshape(c.width(), c.height())) return;
         for (const scrible::Damage& d : damage) {
             const scrible::IRect r = d.rect.intersected(c.rect());
             if (r.empty()) continue;
@@ -123,6 +145,7 @@ private:
     }
 
     std::unique_ptr<scrible::EinkPanel> panel_;  // null with --no-eink-sim
+    int w_ = 0, h_ = 0;                          // the canvas, as the window shows it
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
     SDL_Texture* texture_ = nullptr;
@@ -155,7 +178,7 @@ int main(int argc, char** argv) {
     }
 
     Window win;
-    if (!win.open(args.width, args.height, args.einkSim)) return 1;
+    if (!win.open(app.canvas().width(), app.canvas().height(), args.einkSim)) return 1;
     win.present(app.canvas(), app.takeDamage());
 
     bool mouseDrawing = false;

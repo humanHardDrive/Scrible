@@ -13,7 +13,7 @@ enum class Action {
     // editor: the tools panel (Tools opens it; sizes apply to the current tool), and
     // the selection's menu: EditMenu (Delete, Duplicate) and MathMenu (the Math ones,
     // on the numbers written in it); Cancel lets go of it
-    Tools, Pen, Shapes, Lasso, Highlighter, Eraser, Text, Pan, ZoomOut, ZoomIn, ZoomFit,
+    Tools, Pen, Shapes, Lasso, Highlighter, Eraser, Text, Pan, ZoomOut, ZoomIn, ZoomFit, Rotate,
     SizeFine, SizeMedium, SizeThick, ErasePartial, EraseWhole,
     EditMenu, MathMenu, MathSum, MathAverage, MathMin, MathMax, MathCount,
     Undo, Redo, Save,

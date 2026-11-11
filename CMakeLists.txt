@@ -79,6 +79,7 @@ add_library(scrible_core STATIC
   src/core/PaperMenu.cpp
   src/core/Png.cpp
   src/core/Renderer.cpp
+  src/core/Rotation.cpp
   src/core/Settings.cpp
   src/core/Shapes.cpp
   src/core/TextPrompt.cpp

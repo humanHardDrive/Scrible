@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "Editor.h"
+#include "Rotation.h"
 
 namespace scrible {
 
@@ -36,7 +37,8 @@ public:
     std::string describe() const;
     std::string aboutLine() const;  // "Kindle Scribe (Barolo), FBInk v1.25.0"
 
-    void present(const Canvas& c, const std::vector<Damage>& damage);
+    // The canvas may be turned (see ScreenRotation): its damage is turned onto the panel.
+    void present(const Canvas& c, const std::vector<Damage>& damage, const ScreenRotation& rotation = {});
 
 private:
     struct State;

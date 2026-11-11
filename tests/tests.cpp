@@ -845,6 +845,108 @@ TEST(lists_notebooks_newest_first) {
     removeDir(dir);
 }
 
+TEST(screen_rotation_maps_pixels_and_input) {
+    // Small, and bigger than the tiles copyOut works in.
+    for (const auto& [W, H] : {std::pair<int, int>{7, 5}, std::pair<int, int>{150, 97}})
+    for (int turns = 0; turns < 4; ++turns) {
+        const ScreenRotation r{turns, W, H};
+        const int lw = r.logicalWidth(), lh = r.logicalHeight();
+        CHECK(lw * lh == W * H && (turns % 2 ? lw == H : lw == W));
+        Canvas c(lw, lh);
+        for (int y = 0; y < lh; ++y)
+            for (int x = 0; x < lw; ++x) c.row(y)[x] = static_cast<uint8_t>((y * 31 + x * 7) % 251);
+        std::vector<uint8_t> panel(W * H);
+        const IRect whole = r.toPhysical(c.rect());
+        CHECK(whole.x0 == 0 && whole.y0 == 0 && whole.x1 == W && whole.y1 == H);
+        r.copyOut(c, whole, panel.data());
+        for (int y = 0; y < lh; ++y) {
+            for (int x = 0; x < lw; ++x) {
+                // The panel pixel that shows canvas pixel (x, y) shows exactly it, and
+                // a touch there comes back as (x, y).
+                const IRect p = r.toPhysical({x, y, x + 1, y + 1});
+                CHECK(p.width() == 1 && p.height() == 1);
+                CHECK(panel[p.y0 * W + p.x0] == c.at(x, y));
+                double lx = -1, ly = -1;
+                r.toLogical(p.x0, p.y0, lx, ly);
+                CHECK(lx == x && ly == y);
+            }
+        }
+        // Part of the canvas, copied on its own, matches the whole.
+        const IRect part = r.toPhysical({1, 1, 4, 3});
+        std::vector<uint8_t> some(part.width() * part.height());
+        r.copyOut(c, part, some.data());
+        for (int y = 0; y < part.height(); ++y)
+            for (int x = 0; x < part.width(); ++x) CHECK(some[y * part.width() + x] == panel[(part.y0 + y) * W + part.x0 + x]);
+    }
+    // A quarter turn clockwise: the panel's left edge is the top of the canvas.
+    const ScreenRotation q{1, 1860, 2480};
+    double x = 0, y = 0;
+    q.toLogical(0, 2479, x, y);
+    CHECK(x == 0 && y == 0);
+}
+
+TEST(rotate_turns_the_app_and_keeps_the_notebook) {
+    const std::string path = tempPath("turned.xopp");
+    std::remove(path.c_str());
+    AppOptions o;
+    o.file = path;
+    o.editor.render.antialias = false;
+    App app(900, 1200, o);
+    CHECK(app.startupError().empty() && app.editor());
+    uint64_t t = 1000;
+    app.penDown({400, 500, 0.5, false}, t += 10);
+    app.penMove({500, 600, 0.5, false}, t += 10);
+    app.penUp(t += 10);
+    const auto& els = [&]() -> const std::vector<Element>& { return app.editor()->document().pages[0].layers.back().elements; };
+    CHECK(els().size() == 1);
+
+    // ROTATE is in the tools.
+    app.perform(Action::Tools, t += 10);
+    CHECK(!app.editor()->toolPanel().buttonRect(Action::Rotate).empty());
+    app.perform(Action::Rotate, t += 10);
+    CHECK(app.rotation().turns == 1);
+    CHECK(app.canvas().width() == 1200 && app.canvas().height() == 900);
+    CHECK(app.editor()->toolbar().rect().width() == 1200);
+    CHECK(!app.editor()->toolPanel().open());
+    const auto d = app.takeDamage();
+    CHECK(d.size() == 1 && d[0].mode == Refresh::Full && d[0].rect.width() == 1200 && d[0].rect.height() == 900);
+    // The whole page fits the wider, shorter screen, and the pen still writes on it.
+    const IRect page = app.editor()->view().pageRect(app.editor()->document().pages[0]);
+    CHECK(page.y0 >= app.editor()->toolbar().rect().y1 && page.y1 <= 900 && page.x0 > 0 && page.x1 < 1200);
+    const double cx = (page.x0 + page.x1) / 2.0, cy = (page.y0 + page.y1) / 2.0;
+    app.penDown({cx, cy, 0.5, false}, t += 10);
+    app.penMove({cx + 50, cy + 20, 0.5, false}, t += 10);
+    app.penUp(t += 10);
+    CHECK(els().size() == 2);
+    const RectF b = std::get<Stroke>(els().back()).bounds();
+    const PageTransform& v = app.editor()->view();
+    CHECK_NEAR(b.x0, v.toPageX(cx), 2);
+    CHECK_NEAR(b.y0, v.toPageY(cy), 2);
+    // Undo reaches back past the turn.
+    app.perform(Action::Undo, t += 10);
+    app.perform(Action::Undo, t += 10);
+    CHECK(els().empty());
+    // Four turns and it's the right way up again.
+    for (int i = 0; i < 3; ++i) app.perform(Action::Rotate, t += 10);
+    CHECK(app.rotation().turns == 0 && app.canvas().width() == 900);
+    std::remove(path.c_str());
+}
+
+TEST(the_turn_is_remembered) {
+    const std::string dir = tempDir("turn");
+    {
+        Settings s(dir + "/.scrible");
+        s.set("rotation", "3");
+    }
+    AppOptions o;
+    o.notebooksDir = dir;
+    App app(900, 1200, o);
+    CHECK(app.rotation().turns == 3);
+    CHECK(app.canvas().width() == 1200 && app.canvas().height() == 900);
+    CHECK(app.library()->toolbar().rect().width() == 1200);
+    removeDir(dir);
+}
+
 TEST(app_opens_notebooks_from_the_list_and_returns) {
     const std::string dir = tempDir("app");
     std::string err;

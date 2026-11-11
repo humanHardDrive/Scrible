@@ -79,10 +79,14 @@ std::string FbinkDisplay::aboutLine() const {
     return std::string("Kindle ") + s_->fb.device_name + " (" + s_->fb.device_codename + "), FBInk " + fbink_version();
 }
 
-void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
+void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage, const ScreenRotation& rotation) {
     if (s_->fd < 0) return;
+    ScreenRotation rot = rotation;
+    rot.width = width();
+    rot.height = height();
+    if (c.width() != rot.logicalWidth() || c.height() != rot.logicalHeight()) rot.turns = 0;  // not turned after all
     for (const Damage& d : damage) {
-        const IRect r = d.rect.intersected(c.rect()).intersected({0, 0, width(), height()});
+        const IRect r = rot.toPhysical(d.rect.intersected(c.rect())).intersected({0, 0, width(), height()});
         if (r.empty()) continue;
 
         // A whole-page preview takes the panel longer than the gesture takes to make
@@ -120,10 +124,10 @@ void FbinkDisplay::present(const Canvas& c, const std::vector<Damage>& damage) {
             s_->penModeOn = false;
         }
 
-        // Copy the region out (FBInk wants tightly packed rows), then refresh it.
+        // Copy the region out (FBInk wants tightly packed rows), turned, then refresh it.
         const int w = r.width(), h = r.height();
         s_->buf.resize(static_cast<size_t>(w) * h);
-        for (int y = 0; y < h; ++y) std::copy_n(c.row(r.y0 + y) + r.x0, w, &s_->buf[static_cast<size_t>(y) * w]);
+        rot.copyOut(c, r, s_->buf.data());
         if (fbink_print_raw_data(s_->fd, s_->buf.data(), w, h, s_->buf.size(), static_cast<short>(r.x0),
                                  static_cast<short>(r.y0), &s_->cfg) < 0) {
             std::fprintf(stderr, "scrible: fbink_print_raw_data failed\n");

@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
         sleep(6);
         return 1;
     }
-    display.present(app.canvas(), app.takeDamage());
+    display.present(app.canvas(), app.takeDamage(), app.rotation());
 
     std::vector<scrible::PenEvent> penEvents;
     std::vector<scrible::TouchEvent> touchEvents;
@@ -305,7 +305,8 @@ int main(int argc, char** argv) {
         for (const auto& e : penEvents) {
             if (asleep && e.type != scrible::PenEvent::Type::Up) continue;
             if (e.type != scrible::PenEvent::Type::Up) stats.add(e.pressure);
-            const scrible::PenSample s{e.x, e.y, e.pressure, e.eraser, e.button};
+            scrible::PenSample s{e.x, e.y, e.pressure, e.eraser, e.button};
+            app.rotation().toLogical(e.x, e.y, s.x, s.y);
             switch (e.type) {
                 case scrible::PenEvent::Type::Down: app.penDown(s, now); break;
                 case scrible::PenEvent::Type::Move: app.penMove(s, now); break;
@@ -319,7 +320,9 @@ int main(int argc, char** argv) {
         app.setPenNear(pen.near());
         for (const auto& e : touchEvents) {
             if (asleep && e.type != scrible::TouchEvent::Type::Up) continue;
-            const int x = static_cast<int>(e.x), y = static_cast<int>(e.y);
+            double lx = 0, ly = 0;
+            app.rotation().toLogical(e.x, e.y, lx, ly);
+            const int x = static_cast<int>(lx), y = static_cast<int>(ly);
             switch (e.type) {
                 case scrible::TouchEvent::Type::Down: app.touchDown(e.id, x, y, now); break;
                 case scrible::TouchEvent::Type::Move: app.touchMove(e.id, x, y, now); break;
@@ -353,7 +356,7 @@ int main(int argc, char** argv) {
 
         app.onIdle(now);
         const auto damage = app.takeDamage();
-        if (!asleep) display.present(app.canvas(), damage);
+        if (!asleep) display.present(app.canvas(), damage, app.rotation());
     }
 
     stats.log(pen);

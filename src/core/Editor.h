@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Canvas.h"
@@ -115,6 +116,12 @@ public:
     // it unsaved). quitRequested() tells EXIT (leave the app) from BACK. The tapped
     // button is shown pressed first; saving and closing follow on the next idle pass.
     bool closeRequested() const { return close_; }
+    // ROTATE was tapped: the app turns the screen a quarter turn (see ScreenRotation)
+    // and calls setScreenSize. Reading it clears it.
+    bool takeRotateRequest() { return std::exchange(rotate_, false); }
+    // The screen changed shape: everything is laid out again for it, and the page fits
+    // it. Whatever was under way (typing, a selection, a menu) is finished first.
+    void setScreenSize(int width, int height, uint64_t now);
     bool quitRequested() const { return close_ && quit_; }
 
     void redrawAll(Refresh mode = Refresh::Full);
@@ -387,6 +394,7 @@ private:
     bool pendingExitShown_ = false;
     bool close_ = false;
     bool quit_ = false;
+    bool rotate_ = false;
 
     std::vector<Damage> damage_;
 };

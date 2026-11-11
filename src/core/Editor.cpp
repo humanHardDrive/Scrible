@@ -140,6 +140,35 @@ Editor::Editor(int screenWidth, int screenHeight, Document doc, std::string path
     redrawAll();
 }
 
+void Editor::setScreenSize(int width, int height, uint64_t now) {
+    if (gesture_ != Gesture::None) penUp(now);
+    if (text_.active) finishText(now);
+    closeKeyboard();
+    closeMath();
+    clearSelection();
+    closePaperMenu();
+    closePanel();
+    if (flashUntil_) endFlash();
+    fingers_.clear();
+    viewGesture_ = ViewGesture::None;
+    viewDirty_ = false;
+    palm_ = false;
+    titleOnly_ = false;
+
+    canvas_ = Canvas(width, height);
+    toolbar_ = Toolbar(width, opts_.toolbarHeight, editorToolbar(opts_.fromList));
+    pageArea_ = {0, opts_.toolbarHeight, width, height};
+    panel_ = ToolPanel(pageArea_);
+    paperMenu_ = PaperMenu(toolbar_.buttonRect(Action::PageStyle), pageArea_);
+    math_ = MathPopup(pageArea_);
+    keyboard_ = Keyboard(width, height, panel_.tabRect().y1 + 12);
+    zoom_ = 1;
+    xf_ = fitPage(currentPage(), pageArea_);
+    settle_ = {};
+    settleAt_ = 0;
+    redrawAll(Refresh::Full);
+}
+
 size_t Editor::currentLayer() {
     Page& p = currentPage();
     if (p.layers.empty()) p.layers.emplace_back();
@@ -1840,6 +1869,11 @@ void Editor::perform(Action a, uint64_t now) {
             tool_ = a == Action::Lasso ? ToolKind::Lasso : ToolKind::Pan;
             panel_.setOpen(false);
             return refreshPanel(panelBefore);
+        case Action::Rotate:
+            panel_.setOpen(false);
+            refreshPanel(panelBefore);
+            rotate_ = true;
+            return;
         case Action::ZoomIn:
         case Action::ZoomOut:
         case Action::ZoomFit: {
@@ -1947,6 +1981,7 @@ void Editor::perform(Action a, uint64_t now) {
         case Action::ZoomOut:
         case Action::ZoomIn:
         case Action::ZoomFit:
+        case Action::Rotate:
         case Action::Highlighter:
         case Action::Eraser:
         case Action::Text:

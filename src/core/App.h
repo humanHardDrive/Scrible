@@ -10,6 +10,7 @@
 
 #include "Editor.h"
 #include "Library.h"
+#include "Rotation.h"
 #include "Settings.h"
 
 namespace scrible {
@@ -26,6 +27,7 @@ struct AppOptions {
 
 class App {
 public:
+    // The screen as it is, unturned; the app may draw on it turned (rotation()).
     App(int width, int height, AppOptions opts);
 
     // Check first: non-empty if the app couldn't start (e.g. the notebook given
@@ -36,6 +38,10 @@ public:
     Editor* editor() { return editor_.get(); }
     Library* library() { return library_.get(); }
     bool quitRequested() const { return quit_; }
+    // How the screen is turned, which ROTATE in a notebook's tools changes (and the
+    // settings remember). canvas() is that way up, and so are the coordinates of the
+    // input: the front end turns its pixels and input with this.
+    const ScreenRotation& rotation() const { return rotation_; }
 
     void redrawAll(Refresh mode = Refresh::Full);
 
@@ -67,11 +73,14 @@ public:
 
 private:
     void handle(const Library::Intent& intent, uint64_t now);
-    void afterEditorInput();
+    void afterEditorInput(uint64_t now);
     bool openNotebook(const std::string& path, std::string& error);
     void showLibrary(const std::string& message = {});
+    void makeLibrary();
+    void rotate(uint64_t now);
 
-    int width_, height_;
+    ScreenRotation rotation_;
+    int width_, height_;  // the canvas, turned
     AppOptions opts_;
     std::unique_ptr<Settings> settings_;  // with a notebooks folder only
     std::unique_ptr<Library> library_;

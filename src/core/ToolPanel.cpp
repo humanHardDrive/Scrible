@@ -32,6 +32,7 @@ const char* label(Action a) {
         case Action::Text: return "TEXT";
         case Action::Pan: return "PAN";
         case Action::ZoomFit: return "FIT";
+        case Action::Rotate: return "ROTATE";
         case Action::ErasePartial: return "PARTIAL";
         case Action::EraseWhole: return "WHOLE";
         default: return "";
@@ -63,8 +64,8 @@ void ToolPanel::layout() {
 
     // The column grows out of the tab, down from the same corner.
     const int columnW = textWidth("SHAPE") + 2 * kGap + kBox + 2 * kTextPad + 2 * kPad;
-    // The tools, then (set apart) zoom out / in side by side, and FIT.
-    const int n = static_cast<int>(std::size(kColumn)) + 2;
+    // The tools, then (set apart) zoom out / in side by side, FIT and ROTATE.
+    const int n = static_cast<int>(std::size(kColumn)) + 3;
     column_ = {tab_.x0, tab_.y0, tab_.x0 + columnW, tab_.y0 + 2 * kPad + n * kButtonH + (n - 1) * kGap + 2 * kGap};
     const int x0 = column_.x0 + kPad, x1 = column_.x1 - kPad, xm = (x0 + x1) / 2;
     int y = column_.y0 + kPad;
@@ -77,6 +78,8 @@ void ToolPanel::layout() {
     buttons_.push_back({Action::ZoomIn, {xm + kGap / 2, y, x1, y + kButtonH}});
     y += kButtonH + kGap;
     buttons_.push_back({Action::ZoomFit, {x0, y, x1, y + kButtonH}});
+    y += kButtonH + kGap;
+    buttons_.push_back({Action::Rotate, {x0, y, x1, y + kButtonH}});
     if (options_ == Action::None) return;
 
     std::vector<Action> opts(std::begin(kSizes), std::end(kSizes));
@@ -166,7 +169,8 @@ void ToolPanel::draw(Canvas& c, const ToolPanelState& s, const IRect& clip) cons
             const int cx = (b.r.x0 + b.r.x1) / 2, cy = (b.r.y0 + b.r.y1) / 2, arm = 16, half = 3;
             fill({cx - arm, cy - half, cx + arm, cy + half}, ink);
             if (b.action == Action::ZoomIn) fill({cx - half, cy - arm, cx + half, cy + arm}, ink);
-        } else if (b.action == Action::ErasePartial || b.action == Action::EraseWhole || b.action == Action::ZoomFit) {
+        } else if (b.action == Action::ErasePartial || b.action == Action::EraseWhole || b.action == Action::ZoomFit ||
+                   b.action == Action::Rotate) {
             drawLabel(c, b.r, -1, label(b.action), ink, clip);
         } else {
             drawLabel(c, b.r, b.r.x0 + kTextPad, label(b.action), ink, clip);

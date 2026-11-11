@@ -18,7 +18,8 @@ constexpr const char* kSizeNames[] = {"fine", "medium", "thick"};
 
 }  // namespace
 
-App::App(int width, int height, AppOptions opts) : width_(width), height_(height), opts_(std::move(opts)) {
+App::App(int width, int height, AppOptions opts)
+    : rotation_{0, width, height}, width_(width), height_(height), opts_(std::move(opts)) {
     std::string error;
     if (!opts_.notebooksDir.empty()) {
         if (!makeDirs(opts_.notebooksDir, &error)) {
@@ -27,9 +28,11 @@ App::App(int width, int height, AppOptions opts) : width_(width), height_(height
             return;
         }
         settings_ = std::make_unique<Settings>(opts_.notebooksDir + "/.scrible");
-        library_ = std::make_unique<Library>(width_, height_, opts_.notebooksDir, settings_.get(),
-                                             opts_.editor.toolbarHeight);
-        library_->setPlatformInfo(opts_.platformInfo);
+        const std::string turns = settings_->get("rotation");
+        if (turns.size() == 1 && turns[0] >= '0' && turns[0] <= '3') rotation_.turns = turns[0] - '0';
+        width_ = rotation_.logicalWidth();
+        height_ = rotation_.logicalHeight();
+        makeLibrary();
     } else if (!openNotebook(opts_.file, error)) {
         startupError_ = error;
         quit_ = true;
@@ -58,6 +61,23 @@ bool App::openNotebook(const std::string& path, std::string& error) {
     return true;
 }
 
+void App::makeLibrary() {
+    library_ = std::make_unique<Library>(width_, height_, opts_.notebooksDir, settings_.get(), opts_.editor.toolbarHeight);
+    library_->setPlatformInfo(opts_.platformInfo);
+}
+
+// A quarter turn clockwise. The notebook stays open, undo and all; the notebook list
+// is made again for the new shape.
+void App::rotate(uint64_t now) {
+    rotation_.turns = (rotation_.turns + 1) % 4;
+    width_ = rotation_.logicalWidth();
+    height_ = rotation_.logicalHeight();
+    if (settings_) settings_->set("rotation", std::to_string(rotation_.turns));
+    if (library_) makeLibrary();
+    if (editor_) editor_->setScreenSize(width_, height_, now);
+    std::fprintf(stderr, "scrible: screen turned %d quarter turn(s), %dx%d\n", rotation_.turns, width_, height_);
+}
+
 void App::showLibrary(const std::string& message) {
     library_->rescan();
     library_->setMessage(message);
@@ -84,8 +104,9 @@ void App::handle(const Library::Intent& intent, uint64_t now) {
     }
 }
 
-void App::afterEditorInput() {
+void App::afterEditorInput(uint64_t now) {
     if (!editor_) return;
+    if (editor_->takeRotateRequest()) rotate(now);
     if (settings_) {
         settings_->set("eraser", editor_->eraseWholeStrokes() ? "stroke" : "partial");
         settings_->set("shapes", editor_->recognizeShapes() ? "on" : "off");
@@ -107,7 +128,7 @@ void App::redrawAll(Refresh mode) {
 void App::penDown(const PenSample& s, uint64_t now) {
     if (editor_) {
         editor_->penDown(s, now);
-        afterEditorInput();
+        afterEditorInput(now);
     } else if (!deferred_) {
         handle(library_->tap(static_cast<int>(s.x), static_cast<int>(s.y), now), now);
     }
@@ -124,7 +145,7 @@ void App::penUp(uint64_t now) {
 void App::touchDown(int x, int y, uint64_t now) {
     if (editor_) {
         editor_->touchDown(x, y, now);
-        afterEditorInput();
+        afterEditorInput(now);
     } else if (!deferred_) {
         handle(library_->tap(x, y, now), now);
     }
@@ -134,7 +155,7 @@ void App::touchDown(int id, int x, int y, uint64_t now) {
     ++fingers_;
     if (editor_) {
         editor_->touchDown(id, x, y, now);
-        afterEditorInput();
+        afterEditorInput(now);
     } else if (!deferred_ && fingers_ == 1) {
         handle(library_->tap(x, y, now), now);
     }
@@ -165,7 +186,7 @@ void App::panBy(double dx, double dy, uint64_t now) {
 void App::perform(Action a, uint64_t now) {
     if (editor_) {
         editor_->perform(a, now);
-        afterEditorInput();
+        afterEditorInput(now);
     } else if (!deferred_) {
         handle(library_->perform(a), now);
     }
@@ -174,7 +195,7 @@ void App::perform(Action a, uint64_t now) {
 void App::type(const std::string& s, uint64_t now) {
     if (!editor_) return;
     editor_->type(s, now);
-    afterEditorInput();
+    afterEditorInput(now);
 }
 
 void App::onIdle(uint64_t now) {
@@ -186,7 +207,7 @@ void App::onIdle(uint64_t now) {
     }
     if (editor_) {
         editor_->onIdle(now);
-        afterEditorInput();  // BACK and EXIT finish here
+        afterEditorInput(now);  // BACK and EXIT finish here
     } else if (library_) {
         library_->onIdle(now);
     }

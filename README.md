@@ -29,6 +29,8 @@ and reads the pen from evdev, sharing Xournal++'s file format.
   is Xournal++'s usual "Sans" on Linux
 - Drawing tools tucked into a panel at the edge of the page, out of the way until tapped
 - Zoom up to 400%: pinch with two fingers, or use the panel's buttons and PAN tool
+- Portrait or landscape: ROTATE in the panel turns the whole app a quarter turn clockwise
+  (toolbar, tools, keyboard and the notebook list), and it stays that way next time
 - Three sizes per tool, undo/redo, multiple pages (`>` on the last page adds one;
   PAGE deletes one)
 - Opens `.xopp` and `.xoj` files from Xournal++ and the original Xournal. Anything it
@@ -123,7 +125,7 @@ In a notebook the toolbar along the top has UNDO / REDO, the notebook's name
 (shortened to fit; tap it to see it whole across the bar, and tap the bar to go back),
 PAGE, `<` page `>`, SAVE, BACK and EXIT. The drawing tools are tucked away behind the arrow tab at the top-left of the
 page. Tap it to open a column of PEN, SHAPE, SELECT, MARK (highlighter), ERASE, TEXT and
-PAN, then zoom buttons. PEN, MARK, ERASE and TEXT show their sizes beside the column, and
+PAN, then zoom buttons and ROTATE. PEN, MARK, ERASE and TEXT show their sizes beside the column, and
 each keeps its own. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
 Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
