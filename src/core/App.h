@@ -48,7 +48,7 @@ public:
     void touchDown(int id, int x, int y, uint64_t now);
     void touchMove(int id, int x, int y, uint64_t now);
     void touchUp(int id, uint64_t now);
-    void setPenNear(bool near);  // the pen hovers over the screen, or touches it
+    void setPenNear(bool near, uint64_t now);  // the pen hovers over the screen, or touches it
     // Mouse wheel and trackpad.
     void zoomBy(double factor, double x, double y, uint64_t now);
     void panBy(double dx, double dy, uint64_t now);

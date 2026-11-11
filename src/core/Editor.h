@@ -125,13 +125,17 @@ public:
     void penUp(uint64_t now);
     // Fingers operate the toolbar and menus. On the page, two fingers pinch to zoom
     // and move the page, and with the PAN tool one finger moves it; that's ignored
-    // while the pen is near the screen, so a resting palm does nothing. `id` tells
-    // fingers apart; touchDown(x, y) is a tap.
+    // while the pen is near the screen, so a resting palm does nothing. A toolbar
+    // button goes when the finger lifts, if that was a tap: one finger, quick, still,
+    // with the pen away for a moment (a hand writing near the top brushes the bar).
+    // `id` tells fingers apart; touchDown(x, y) is a tap.
     void touchDown(int x, int y, uint64_t now);
     void touchDown(int id, int x, int y, uint64_t now);
     void touchMove(int id, int x, int y, uint64_t now);
     void touchUp(int id, uint64_t now);
-    void setPenNear(bool near);  // hovering over the screen, or on it: fingers on the page are a palm
+    // Hovering over the screen, or on it: fingers on the page are a palm, and so are
+    // fingers on the toolbar, then and shortly after.
+    void setPenNear(bool near, uint64_t now);
     // Mouse wheel and trackpad (desktop): zoom about a point, or move the page.
     void zoomBy(double factor, double x, double y, uint64_t now);
     void panBy(double dx, double dy, uint64_t now);
@@ -191,6 +195,8 @@ private:
     void viewFrame(uint64_t now);
     void endViewGesture(uint64_t now);
     void rejectPalm(const char* why);
+    void startBarTap(int id, int x, int y, uint64_t now);
+    void cancelBarTap(const char* why);
     void addPage(uint64_t now);
     void eraseAt(const PenSample& s, uint64_t now);
     void previewArea(const IRect& r, uint64_t now);
@@ -312,6 +318,16 @@ private:
     PageTransform viewStart_;
     double zoomStart_ = 1;
     bool palm_ = false;  // the fingers down now are a palm: ignored until they all lift
+    std::vector<int> touches_;  // every finger on the screen, wherever it is
+    // A finger on the toolbar, waiting to lift: its button goes then, if it was a tap.
+    struct BarTap {
+        bool active = false;
+        int id = 0, x = 0, y = 0;
+        uint64_t at = 0;
+    };
+    BarTap barTap_;
+    bool penWasNear_ = false;  // ...and when it went away, for the toolbar
+    uint64_t penAwayAt_ = 0;
     StrokePoint viewAnchor_{0, 0};  // the page point held under the fingers or pen
     bool viewDirty_ = false;
     uint64_t lastViewFrame_ = 0;

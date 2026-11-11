@@ -2200,15 +2200,80 @@ TEST(pinch_zooms_about_the_fingers) {
 
     // With the pen near the screen, two fingers are a palm: nothing happens.
     e.perform(Action::ZoomFit, t += 10);
-    e.setPenNear(true);
+    e.setPenNear(true, t);
     e.touchDown(0, 700, 1300, t += 10);
     e.touchDown(1, 1100, 1300, t += 10);
     e.touchMove(1, 1500, 1300, t += 200);
     e.touchUp(0, t += 10);
     e.touchUp(1, t += 10);
     CHECK(e.zoom() == 1);
-    e.setPenNear(false);
+    e.setPenNear(false, t);
     CHECK(e.document().pages[0].layers.back().elements.size() == 1);  // fingers never draw
+}
+
+TEST(a_hand_on_the_toolbar_presses_nothing) {
+    Editor e(900, 1200, Document{}, tempPath("barpalm.xopp"));
+    const auto& els = e.document().pages[0].layers.back().elements;
+    const IRect undo = center(e.toolbar().buttonRect(Action::Undo));
+    const IRect redo = center(e.toolbar().buttonRect(Action::Redo));
+    uint64_t t = 1000;
+    e.penDown({500, 500, 0.5, false}, t += 10);
+    e.penMove({600, 520, 0.5, false}, t += 10);
+    e.penUp(t += 10);
+    CHECK(els.size() == 1);
+
+    // A tap: the button goes when the finger lifts.
+    e.touchDown(0, undo.x0, undo.y0, t += 1000);
+    CHECK(els.size() == 1);
+    e.touchUp(0, t += 120);
+    CHECK(els.empty());
+    e.touchDown(redo.x0, redo.y0, t += 1000);
+    CHECK(els.size() == 1);
+
+    auto tapUndo = [&](uint64_t holdMs) {
+        e.touchDown(0, undo.x0, undo.y0, t += 10);
+        e.touchUp(0, t += holdMs);
+    };
+    // With the pen near, and just after it went away, it's a hand.
+    e.setPenNear(true, t += 1000);
+    tapUndo(100);
+    CHECK(els.size() == 1);
+    e.setPenNear(false, t += 10);
+    tapUndo(100);
+    CHECK(els.size() == 1);
+    // The pen coming near while the finger is down.
+    e.touchDown(0, undo.x0, undo.y0, t += 1000);
+    e.setPenNear(true, t += 50);
+    e.setPenNear(false, t += 50);
+    e.touchUp(0, t += 1000);
+    CHECK(els.size() == 1);
+    // Resting there, or sliding.
+    tapUndo(1500);
+    CHECK(els.size() == 1);
+    e.touchDown(0, undo.x0, undo.y0, t += 1000);
+    e.touchMove(0, undo.x0 + 100, undo.y0, t += 50);
+    e.touchUp(0, t += 50);
+    CHECK(els.size() == 1);
+    // More than one finger: a finger landing on the page meanwhile, or one already down.
+    e.touchDown(0, undo.x0, undo.y0, t += 1000);
+    e.touchDown(1, 400, 900, t += 20);
+    e.touchUp(0, t += 50);
+    e.touchUp(1, t += 50);
+    CHECK(els.size() == 1);
+    e.touchDown(1, 400, 900, t += 1000);
+    tapUndo(100);
+    e.touchUp(1, t += 50);
+    CHECK(els.size() == 1);
+    // The pen writing (it comes down) while a finger is on the bar.
+    e.touchDown(0, undo.x0, undo.y0, t += 1000);
+    e.penDown({500, 700, 0.5, false}, t += 10);
+    e.penUp(t += 10);
+    e.touchUp(0, t += 50);
+    CHECK(els.size() == 2);
+
+    // A while later, a tap works again.
+    tapUndo(100);
+    CHECK(els.size() == 1);
 }
 
 TEST(a_hand_landing_on_the_page_doesnt_zoom) {
@@ -2233,11 +2298,11 @@ TEST(a_hand_landing_on_the_page_doesnt_zoom) {
     }
     CHECK(e.zoom() == 1 && flush().empty());
     // ...then the pen comes near: it was a palm. Moving now does nothing.
-    e.setPenNear(true);
+    e.setPenNear(true, t);
     e.touchMove(1, 1500, 2100, t += 100);
     e.onIdle(t += 200);
     CHECK(e.zoom() == 1 && flush().empty());
-    e.setPenNear(false);
+    e.setPenNear(false, t);
     e.touchMove(1, 1600, 2200, t += 100);  // still the same hand, until it lifts
     e.onIdle(t += 200);
     CHECK(e.zoom() == 1);
@@ -2251,9 +2316,9 @@ TEST(a_hand_landing_on_the_page_doesnt_zoom) {
     e.onIdle(t += 200);
     CHECK(e.zoom() > 1);
     flush();
-    e.setPenNear(true);
+    e.setPenNear(true, t);
     CHECK(e.zoom() == 1 && hasMode(flush(), Refresh::Full));
-    e.setPenNear(false);
+    e.setPenNear(false, t);
     e.touchUp(0, t += 10);
     e.touchUp(1, t += 10);
 

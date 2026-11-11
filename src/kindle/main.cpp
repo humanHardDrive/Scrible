@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
         touchEvents.clear();
         if (fds[1].revents & POLLIN) touch.read(touchEvents);
         // Pinching only works with the pen away from the screen (palm rejection).
-        app.setPenNear(pen.near());
+        app.setPenNear(pen.near(), now);
         for (const auto& e : touchEvents) {
             if (asleep && e.type != scrible::TouchEvent::Type::Up) continue;
             const int x = static_cast<int>(e.x), y = static_cast<int>(e.y);

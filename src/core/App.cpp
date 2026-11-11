@@ -54,7 +54,7 @@ bool App::openNotebook(const std::string& path, std::string& error) {
                 if (settings_->get(kSizeKeys[k]) == kSizeNames[i]) eo.sizes[k] = static_cast<ToolSize>(i);
     }
     editor_ = std::make_unique<Editor>(width_, height_, std::move(doc), path, eo);
-    editor_->setPenNear(penNear_);
+    editor_->setPenNear(penNear_, 0);
     return true;
 }
 
@@ -149,9 +149,9 @@ void App::touchUp(int id, uint64_t now) {
     if (editor_) editor_->touchUp(id, now);
 }
 
-void App::setPenNear(bool near) {
+void App::setPenNear(bool near, uint64_t now) {
     penNear_ = near;
-    if (editor_) editor_->setPenNear(near);
+    if (editor_) editor_->setPenNear(near, now);
 }
 
 void App::zoomBy(double factor, double x, double y, uint64_t now) {

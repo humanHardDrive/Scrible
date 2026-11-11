@@ -26,6 +26,11 @@ constexpr uint64_t kFlashMs = 250;                  // how long a pressed button
 constexpr int kTapId = -1;                         // the finger of touchDown(x, y)
 constexpr double kFingerSlop = 50;                 // px fingers move before they zoom or pan (~4 mm)
 constexpr double kMoveSlop = 12;                   // px the pen moves before a text it's on moves (~1 mm)
+// A tap on the toolbar, rather than a hand brushing it: no further than this from
+// where it landed (~3 mm), no longer than this, and not this soon after the pen was near.
+constexpr double kTapSlop = 40;
+constexpr uint64_t kTapMaxMs = 600;
+constexpr uint64_t kPenGraceMs = 400;
 
 bool sameView(const PageTransform& a, const PageTransform& b) {
     return a.scale == b.scale && a.offsetX == b.offsetX && a.offsetY == b.offsetY;
@@ -479,6 +484,7 @@ void Editor::scheduleSettle(const IRect& r, uint64_t now) {
 void Editor::penDown(const PenSample& s, uint64_t now) {
     if (gesture_ != Gesture::None) penUp(now);  // missed an "up"; close the old gesture first
     penActivity(now);
+    if (barTap_.active) cancelBarTap("the pen came down");
 
     const int x = static_cast<int>(s.x), y = static_cast<int>(s.y);
     if (toolbar_.rect().contains(x, y)) {
@@ -663,9 +669,11 @@ void Editor::touchDown(int x, int y, uint64_t now) {
 }
 
 void Editor::touchDown(int id, int x, int y, uint64_t now) {
+    if (std::find(touches_.begin(), touches_.end(), id) == touches_.end()) touches_.push_back(id);  // ids get reused
+    if (barTap_.active) cancelBarTap("another finger came down");
     if (gesture_ != Gesture::None) return;  // the pen is busy; this is a palm
     if (fingers_.empty() && viewGesture_ == ViewGesture::None) {  // buttons answer the first finger only
-        if (toolbar_.rect().contains(x, y)) return press(toolbarHit(x, y), now);
+        if (toolbar_.rect().contains(x, y)) return startBarTap(id, x, y, now);
         if (panel_.covers(x, y)) return press(panel_.hit(x, y), now);
         if (paperMenu_.covers(x, y)) return press(paperMenu_.hit(x, y), now);
         if (keyboard_.covers(x, y)) return keyPress(x, y, now);
@@ -704,9 +712,33 @@ void Editor::touchDown(int id, int x, int y, uint64_t now) {
     }
 }
 
-void Editor::setPenNear(bool near) {
+void Editor::setPenNear(bool near, uint64_t now) {
+    if (penNear_ && !near) {
+        penWasNear_ = true;
+        penAwayAt_ = now;
+    }
     penNear_ = near;
+    if (near && barTap_.active) cancelBarTap("the pen came near");
     if (near && viewGesture_ != ViewGesture::None && !fingers_.empty()) rejectPalm("the pen came near");
+}
+
+// A finger came down on the toolbar. Its button waits for it to lift, unless it
+// looks like a hand already.
+void Editor::startBarTap(int id, int x, int y, uint64_t now) {
+    const char* why = touches_.size() > 1                              ? "another finger is down"
+                      : penNear_                                       ? "the pen is near"
+                      : penWasNear_ && now < penAwayAt_ + kPenGraceMs ? "the pen was just near"
+                                                                       : nullptr;
+    if (why) {
+        std::fprintf(stderr, "scrible: toolbar touch taken for a palm (%s)\n", why);
+        return;
+    }
+    barTap_ = {true, id, x, y, now};
+}
+
+void Editor::cancelBarTap(const char* why) {
+    barTap_.active = false;
+    std::fprintf(stderr, "scrible: toolbar touch taken for a palm (%s)\n", why);
 }
 
 // The fingers turned out to be a hand resting on the page: put the view back as it
@@ -723,6 +755,8 @@ void Editor::rejectPalm(const char* why) {
 }
 
 void Editor::touchMove(int id, int x, int y, uint64_t now) {
+    if (barTap_.active && id == barTap_.id && std::hypot(x - barTap_.x, y - barTap_.y) > kTapSlop)
+        cancelBarTap("it slid");
     auto f = std::find_if(fingers_.begin(), fingers_.end(), [&](const Finger& g) { return g.id == id; });
     if (f == fingers_.end()) return;
     f->x = x;
@@ -747,6 +781,15 @@ void Editor::touchMove(int id, int x, int y, uint64_t now) {
 }
 
 void Editor::touchUp(int id, uint64_t now) {
+    const auto t = std::find(touches_.begin(), touches_.end(), id);
+    if (t != touches_.end()) touches_.erase(t);
+    if (barTap_.active && id == barTap_.id) {
+        barTap_.active = false;
+        if (now <= barTap_.at + kTapMaxMs)
+            press(toolbarHit(barTap_.x, barTap_.y), now);
+        else
+            std::fprintf(stderr, "scrible: toolbar touch taken for a palm (it rested)\n");
+    }
     fingers_.erase(std::remove_if(fingers_.begin(), fingers_.end(), [&](const Finger& g) { return g.id == id; }),
                    fingers_.end());
     if (fingers_.empty()) palm_ = false;

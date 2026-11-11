@@ -128,6 +128,9 @@ each keeps its own. Picking one
 puts the tools away again, and so does a finger tap on the page or writing on it.
 Fingers only operate the toolbar, the tools and the selection buttons, so your palm can
 rest on the page. Buttons invert for a moment when pressed, to show they were hit.
+A toolbar button goes when your finger lifts, and only for a quick tap with one finger,
+while the pen is away from the screen, so a hand brushing the bar as you write near the
+top of the page presses nothing.
 
 - SELECT: draw a loop around strokes and texts to select those mostly inside it. Drag
   inside the dashed frame to move them, or drag the corner handle to resize (line widths
