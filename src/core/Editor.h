@@ -105,8 +105,8 @@ public:
     double zoom() const { return zoom_; }
     const PageTransform& view() const { return xf_; }
 
-    // Lasso selection (strokes of the top layer), and its on-screen frame, resize
-    // handle and buttons; empty when nothing is selected.
+    // Lasso selection (strokes and texts of the top layer), and its on-screen frame,
+    // resize handle and buttons; empty when nothing is selected.
     const std::vector<size_t>& selection() const { return sel_.indices; }
     IRect selectionFrame() const;
     IRect selectionHandle() const;
@@ -166,7 +166,7 @@ private:
         std::optional<Page> pageData;    // AddPage: filled while undone; DeletePage: while done
         Background background{};         // Background: the page's other one (swapped in and out)
     };
-    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag, Pan, MoveAnswer };
+    enum class Gesture { None, Draw, Erase, Toolbar, Lasso, Drag, Pan, MoveText };
     enum class DragKind { Move, Resize };
     struct OverlayButton {
         Action action;
@@ -244,7 +244,12 @@ private:
     void endFlash();
     void replaceAnswer(size_t i, ForeignElement a, uint64_t now);
     void deleteAnswer(uint64_t now);
-    void dragAnswerTo(const StrokePoint& p);
+    // Moving a text or a math answer with the pen. It only moves once the pen has
+    // gone a little way; with `editOnTap`, a tap types in it instead.
+    void startMove(size_t i, const PenSample& s, bool editOnTap);
+    void dragTextTo(const StrokePoint& p);
+    void finishMove(uint64_t now);
+    IRect movedArea(size_t i) const;  // what it covers on the screen, with its i or the typing frame
     int textAt(int x, int y) const;  // a text (not a math answer) of the top layer there, or -1
     const ForeignElement& typed() const;
     double textSize() const;
@@ -259,6 +264,7 @@ private:
     // Done typing: the text becomes an undo step (it goes if it's empty). The keyboard
     // can stay up, for another text.
     void finishText(uint64_t now, bool keepKeyboard = false);
+    void closeKeyboard();
     void finishExit(uint64_t now);
     void updateToolbar();
     void markModified(uint64_t now);
@@ -276,8 +282,10 @@ private:
     Keyboard keyboard_;
     int answer_ = -1;                      // the answer whose numbers the popup shows (an element index)
     std::unique_ptr<DigitReader> digits_;  // loaded the first time it's needed
-    ForeignElement answerBefore_;          // an answer being dragged, as it was
-    size_t dragAnswer_ = 0;
+    ForeignElement textBefore_;  // a text or an answer being moved, as it was
+    size_t dragText_ = 0;
+    double downX_ = 0, downY_ = 0;  // where the pen came down on it
+    bool moved_ = false, editOnTap_ = false;
     Background paperBefore_;       // the page's paper when the menu opened
     bool deleteArmed_ = false;     // DELETE PAGE tapped once
     bool closePanelOnUp_ = false;  // the pen came down beside the open panel or paper menu
@@ -350,7 +358,7 @@ private:
     double lassoDots_ = 0;  // distance since the last dot of the dotted outline
     DragKind dragKind_ = DragKind::Move;
     StrokePoint dragStart_{0, 0};
-    std::vector<Stroke> dragOriginals_;  // the selection as it was when the drag started
+    std::vector<Element> dragOriginals_;  // the selection as it was when the drag started
     RectF dragFrom_;
     IRect dragDirty_;
     uint64_t lastDragFrame_ = 0;

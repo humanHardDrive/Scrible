@@ -1485,7 +1485,7 @@ TEST(lasso_geometry) {
     els.push_back(ForeignElement{});  // text and images aren't selectable (yet)
     els.push_back(mostly);
     els.push_back(half);
-    CHECK(strokesInLasso(els, square) == (std::vector<size_t>{0, 2}));
+    CHECK(elementsInLasso(els, square) == (std::vector<size_t>{0, 2}));
 
     Stroke s;
     s.width = 2;
@@ -2728,6 +2728,78 @@ TEST(selection_math_reads_and_can_be_corrected) {
     removeDir(dir);
 }
 
+TEST(typed_numbers_read_like_strtod) {
+    CHECK(typedNumber("12") == "12");
+    CHECK(typedNumber("  -1,250.5") == "-1,250.5");
+    CHECK(typedNumber("+7") == "7");
+    CHECK(typedNumber(".5") == "0.5");
+    CHECK(typedNumber("12 apples") == "12");
+    CHECK(typedNumber("3.") == "3");
+    CHECK(typedNumber("1.5.6") == "1.5");
+    CHECK(typedNumber("12,5") == "12");  // not thousands: it ends at the comma
+    CHECK(typedNumber("Total: 42").empty());
+    CHECK(typedNumber("-").empty() && typedNumber("").empty() && typedNumber(",5").empty());
+}
+
+TEST(math_reads_typed_text_as_it_is) {
+    const std::string dir = tempDir("typed-math");
+    EditorOptions o;
+    o.render.antialias = false;
+    Editor e(1860, 2480, Document{}, dir + "/math.xopp", o);
+    uint64_t t = 1000;
+    auto pen = [&](const Path& p) {
+        e.penDown({p[0].x, p[0].y, 0.5, false}, t += 10);
+        for (size_t i = 1; i < p.size(); ++i) e.penMove({p[i].x, p[i].y, 0.5, false}, t += 5);
+        e.penUp(t += 5);
+    };
+    auto typeAt = [&](int x, int y, const std::string& text) {
+        e.perform(Action::Text, t += 10);
+        e.penDown({double(x), double(y), 0.5, false}, t += 10);
+        e.penUp(t += 10);
+        e.type(text, t += 10);
+        e.perform(Action::Confirm, t += 10);
+    };
+    // Written: 12 and -30. Typed between them: 7.5; under them, 4 apples; and a heading.
+    for (const Path& p : writePaths("12", 700, 900, 60, 100)) pen(p);
+    for (const Path& p : writePaths("-30", 700, 1220, 60, 100)) pen(p);
+    typeAt(700, 1110, "7.5");
+    typeAt(700, 1430, "4 apples");
+    typeAt(700, 830, "Groceries");
+    const auto& els = e.document().pages[0].layers.back().elements;
+    e.perform(Action::Lasso, t += 10);
+    pen({{600, 760}, {1500, 760}, {1500, 1520}, {600, 1520}, {600, 770}});
+    size_t texts = 0;
+    for (size_t i : e.selection()) texts += std::holds_alternative<ForeignElement>(els[i]);
+    CHECK(texts == 3);
+    e.perform(Action::MathSum, t += 10);
+    CHECK(e.answers().size() == 1);
+    auto answer = [&](size_t k) { return std::get<ForeignElement>(els[e.answers()[k]]); };
+    CHECK(answer(0).text == "-6.5");
+    CHECK(answer(0).mathNumbers == (std::vector<std::string>{"12", "7.5", "-30", "4"}));  // in reading order
+
+    // Typed alone: the answer is the typed size.
+    e.perform(Action::Lasso, t += 10);
+    RectF apples;
+    for (const Element& el : els)
+        if (const auto* f = std::get_if<ForeignElement>(&el); f && f->text == "4 apples") apples = f->bounds;
+    const IRect four = xf(e, apples);
+    pen({{four.x0 - 30.0, four.y0 - 30.0}, {four.x1 + 30.0, four.y0 - 30.0}, {four.x1 + 30.0, four.y1 + 30.0},
+         {four.x0 - 30.0, four.y1 + 30.0}, {four.x0 - 25.0, four.y0 - 25.0}});
+    CHECK(e.selection().size() == 1);
+    e.perform(Action::MathCount, t += 10);
+    CHECK(e.answers().size() == 2 && answer(1).text == "1");
+    CHECK_NEAR(answer(1).textSize, 14, 0.01);
+
+    // Answers are typed text too: gone over again, both count.
+    e.perform(Action::Lasso, t += 10);
+    pen({{600, 760}, {1500, 760}, {1500, 1800}, {600, 1800}, {600, 770}});
+    e.perform(Action::MathSum, t += 10);
+    CHECK(e.answers().size() == 3 && answer(2).text == "-12");  // 12 + 7.5 - 30 + 4, then -6.5 and 1
+    std::vector<std::string> used = answer(2).mathNumbers;
+    std::sort(used.begin(), used.end());
+    CHECK(used == (std::vector<std::string>{"-30", "-6.5", "1", "12", "4", "7.5"}));
+}
+
 TEST(math_works_while_zoomed_in) {
     EditorOptions o;
     o.render.antialias = false;
@@ -2990,6 +3062,12 @@ struct TypingRig {
         flush();
         return true;
     }
+    void drag(int x0, int y0, int x1, int y1) {
+        e.penDown({double(x0), double(y0), 0.5, false}, t += 10);
+        for (int k = 1; k <= 10; ++k) e.penMove({x0 + (x1 - x0) * k / 10.0, y0 + (y1 - y0) * k / 10.0, 0.5, false}, t += 20);
+        e.penUp(t += 10);
+        flush();
+    }
     const std::vector<Element>& els() const { return e.document().pages[0].layers.back().elements; }
     const ForeignElement& text(size_t i) const { return std::get<ForeignElement>(els().at(i)); }
 };
@@ -3121,6 +3199,134 @@ TEST(typing_breaks_lines_at_the_page_edge_and_takes_any_size) {
     CHECK(!e.typing() && !e.keyboard().open() && r.els().size() == 1);
     r.settle();
     CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+}
+
+TEST(texts_move_with_the_pen) {
+    TypingRig r("move-text.xopp");
+    Editor& e = r.e;
+    const Page& page = e.document().pages[0];
+    e.perform(Action::Text, r.t += 10);
+    r.pen(300, 500);
+    e.type("Note", r.t += 10);
+    CHECK(r.key("DONE"));
+    const double scale = fitPage(page, {0, e.toolbar().rect().y1, 1200, 1600}).scale;
+    const double x0 = r.text(0).textX, y0 = r.text(0).textY;
+    auto middle = [&] { return center(xf(e, r.text(0).bounds)); };
+
+    // With the pen: dragged, not written on. One undo step.
+    e.perform(Action::Pen, r.t += 10);
+    IRect m = middle();
+    r.drag(m.x0, m.y0, m.x0 + 200, m.y0 + 300);
+    CHECK(r.els().size() == 1 && !e.typing());
+    CHECK_NEAR(r.text(0).textX, x0 + 200 / scale, 0.01);
+    CHECK_NEAR(r.text(0).textY, y0 + 300 / scale, 0.01);
+    CHECK(r.text(0).text == "Note");
+    r.settle();
+    CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+    e.perform(Action::Undo, r.t += 10);
+    CHECK_NEAR(r.text(0).textX, x0, 1e-9);
+    e.perform(Action::Redo, r.t += 10);
+    // A pen that barely moves on it doesn't nudge it, and draws nothing.
+    const double x1 = r.text(0).textX;
+    m = middle();
+    r.drag(m.x0, m.y0, m.x0 + 4, m.y0 + 3);
+    CHECK(r.els().size() == 1 && r.text(0).textX == x1);
+
+    // With TEXT, a tap types in it and a drag moves it.
+    e.perform(Action::Text, r.t += 10);
+    m = middle();
+    r.pen(m.x0, m.y0);
+    CHECK(e.typing() && e.typedText() == 0);
+    // Dragged while typing: still typing, and the move is part of the typing's undo step.
+    m = middle();
+    r.drag(m.x0, m.y0, m.x0 - 100, m.y0 + 100);
+    CHECK(e.typing() && e.keyboard().open());
+    CHECK_NEAR(r.text(0).textX, x1 - 100 / scale, 0.01);
+    e.type("s", r.t += 10);
+    CHECK(r.key("DONE"));
+    CHECK(r.text(0).text.find('s') != std::string::npos);
+    e.perform(Action::Undo, r.t += 10);
+    CHECK(r.text(0).text == "Note" && r.text(0).textX == x1);
+    // Not typing: a drag with TEXT moves it and brings up no keyboard.
+    m = middle();
+    r.drag(m.x0, m.y0, m.x0 + 50, m.y0 + 50);
+    CHECK(!e.typing() && !e.keyboard().open());
+    CHECK_NEAR(r.text(0).textX, x1 + 50 / scale, 0.01);
+    // Typing another, then dragging this one: done with that one, and the keyboard goes.
+    r.pen(300, 300);
+    CHECK(e.typing() && e.typedText() == 1 && !e.keyboard().atTop());
+    e.type("Two", r.t += 10);
+    m = middle();
+    r.drag(m.x0, m.y0, m.x0 + 20, m.y0 + 40);
+    CHECK(!e.typing() && !e.keyboard().open() && r.els().size() == 2);
+    // Dragged far off: it stops at the page's edges.
+    r.drag(m.x0, m.y0 + 40, m.x0 + 5000, m.y0 + 5000);
+    CHECK(r.text(0).bounds.x1 <= page.width + 0.01 && r.text(0).bounds.y1 <= page.height + 0.01);
+    CHECK(r.text(0).bounds.x1 > page.width - 1);
+    r.settle();
+    CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+}
+
+TEST(select_takes_texts_with_strokes) {
+    TypingRig r("select-text.xopp");
+    Editor& e = r.e;
+    e.perform(Action::Text, r.t += 10);
+    r.pen(300, 400);
+    e.type("Label", r.t += 10);
+    e.perform(Action::Pen, r.t += 10);
+    drawLine(e, 300, 600, 600, r.t);
+    r.flush();
+    CHECK(r.els().size() == 2);
+    const auto bounds = [&](size_t i) { return elementBounds(r.els()[i]); };
+    const auto loop = [&](int x0, int y0, int x1, int y1) {
+        e.penDown({double(x0), double(y0), 0.5, false}, r.t += 10);
+        for (const auto& p : std::vector<std::pair<int, int>>{{x1, y0}, {x1, y1}, {x0, y1}, {x0 + 5, y0 + 5}})
+            e.penMove({double(p.first), double(p.second), 0.5, false}, r.t += 20);
+        e.penUp(r.t += 10);
+        r.flush();
+    };
+
+    // A loop around both selects both.
+    e.perform(Action::Lasso, r.t += 10);
+    loop(250, 330, 700, 680);
+    CHECK(e.selection().size() == 2);
+    const RectF text0 = bounds(0), line0 = bounds(1);
+    // Dragged from the text itself, the whole selection moves, as one undo step.
+    const IRect on = center(xf(e, text0));
+    r.drag(on.x0, on.y0, on.x0 + 100, on.y0 + 200);
+    const double dx = bounds(0).x0 - text0.x0, dy = bounds(0).y0 - text0.y0;
+    CHECK(dx > 1 && dy > 1);
+    CHECK_NEAR(bounds(1).x0 - line0.x0, dx, 0.02);
+    CHECK_NEAR(bounds(1).y0 - line0.y0, dy, 0.02);
+    CHECK(e.selection().size() == 2);
+    e.perform(Action::Undo, r.t += 10);
+    CHECK_NEAR(bounds(0).x0, text0.x0, 1e-9);
+    CHECK_NEAR(bounds(1).x0, line0.x0, 1e-9);
+
+    // Resized: the text's font grows with the writing.
+    loop(250, 330, 700, 680);
+    CHECK(e.selection().size() == 2);
+    const IRect h = center(e.selectionHandle());
+    r.drag(h.x0, h.y0, h.x0 + 200, h.y0 + 200);
+    CHECK(std::get<ForeignElement>(r.els()[0]).textSize > 14 * 1.2);
+    CHECK(std::get<ForeignElement>(r.els()[0]).text == "Label");
+
+    // Duplicated and deleted like strokes.
+    e.perform(Action::Duplicate, r.t += 10);
+    CHECK(r.els().size() == 4 && e.selection() == (std::vector<size_t>{2, 3}));
+    CHECK(std::get<ForeignElement>(r.els()[2]).text == "Label");
+    e.perform(Action::Delete, r.t += 10);
+    CHECK(r.els().size() == 2);
+    r.settle();
+    CHECK_NEAR(panelMismatches(r.panel, e.canvas()), 0, 0);
+
+    // A loop around the text alone takes just the text.
+    e.perform(Action::Undo, r.t += 10);
+    e.perform(Action::Undo, r.t += 10);
+    e.perform(Action::Undo, r.t += 10);
+    const IRect t0 = xf(e, bounds(0));
+    loop(t0.x0 - 30, t0.y0 - 30, t0.x1 + 30, t0.y1 + 30);
+    CHECK(e.selection() == (std::vector<size_t>{0}));
 }
 
 TEST(the_eraser_removes_typed_text) {

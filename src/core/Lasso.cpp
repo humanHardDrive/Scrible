@@ -3,7 +3,7 @@
 namespace scrible {
 
 namespace {
-constexpr double kInsideShare = 0.7;  // of a stroke's points, for it to count as selected
+constexpr double kInsideShare = 0.7;  // of a stroke's points (or a text's box), for it to count as selected
 }
 
 bool pointInPolygon(const StrokePoint& p, const std::vector<StrokePoint>& polygon) {
@@ -16,17 +16,26 @@ bool pointInPolygon(const StrokePoint& p, const std::vector<StrokePoint>& polygo
     return inside;
 }
 
-std::vector<size_t> strokesInLasso(const std::vector<Element>& elements, const std::vector<StrokePoint>& loop) {
+std::vector<size_t> elementsInLasso(const std::vector<Element>& elements, const std::vector<StrokePoint>& loop) {
     std::vector<size_t> out;
     if (loop.size() < 3) return out;
     RectF area;
     for (const StrokePoint& p : loop) area.add(p.x, p.y);
     for (size_t i = 0; i < elements.size(); ++i) {
-        const auto* s = std::get_if<Stroke>(&elements[i]);
-        if (!s || s->points.empty() || !s->bounds().intersects(area)) continue;
+        std::vector<StrokePoint> points;
+        if (const auto* s = std::get_if<Stroke>(&elements[i]); s && s->bounds().intersects(area)) {
+            points = s->points;
+        } else if (const auto* f = std::get_if<ForeignElement>(&elements[i]);
+                   f && f->tag == "text" && f->bounds.valid && f->bounds.intersects(area)) {
+            // Its box, as a grid of points.
+            const RectF& b = f->bounds;
+            for (int gy = 0; gy <= 4; ++gy)
+                for (int gx = 0; gx <= 8; ++gx) points.push_back({b.x0 + (b.x1 - b.x0) * gx / 8, b.y0 + (b.y1 - b.y0) * gy / 4});
+        }
+        if (points.empty()) continue;
         size_t inside = 0;
-        for (const StrokePoint& p : s->points) inside += pointInPolygon(p, loop);
-        if (inside >= kInsideShare * static_cast<double>(s->points.size())) out.push_back(i);
+        for (const StrokePoint& p : points) inside += pointInPolygon(p, loop);
+        if (inside >= kInsideShare * static_cast<double>(points.size())) out.push_back(i);
     }
     return out;
 }
